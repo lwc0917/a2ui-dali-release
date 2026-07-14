@@ -7,12 +7,23 @@
 #  5) compare.py 스모크 (PASS/REVIEW/side 카드/시트)
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-export WORKSPACE="$(mktemp -d /tmp/a2ui-release-selftest.XXXXXX)"
-trap 'rm -rf "$WORKSPACE"' EXIT
 source "$ROOT/automation/lib/load_env.sh"
 source "$ROOT/automation/lib/ui.sh"
 source "$ROOT/automation/lib/dali.sh"
 source "$ROOT/automation/lib/claude.sh"
+
+# 격리 워크스페이스는 반드시 load_env(.env 로드) '이후'에 지정한다.
+# ※ 실측 사고: .env 에 WORKSPACE 가 있으면 load_env 가 사전 export 를 덮어써서
+#   종료 trap 이 '운영 워크스페이스'를 rm -rf 해버렸음. 전용 변수 + /tmp 가드로 방지.
+TESTWS="$(mktemp -d /tmp/a2ui-release-selftest.XXXXXX)"
+export WORKSPACE="$TESTWS"
+cleanup_testws() {
+  case "$TESTWS" in
+  /tmp/a2ui-release-selftest.*) rm -rf "$TESTWS" ;;
+  *) ui_err "selftest cleanup 가드: 예상 밖 경로 삭제 거부 ($TESTWS)" ;;
+  esac
+}
+trap cleanup_testws EXIT
 
 FAILED=0
 t() { # $1=desc, 이후=명령 — 성공해야 통과
@@ -47,11 +58,14 @@ t "처리 가능분이 모두 ledger 에 있으면 후보 없음" select_none
 
 ui_step "[selftest] 2) ledger"
 t "ledger_add 후 ledger_has" bash -c "
-  source '$ROOT/automation/lib/load_env.sh'; source '$ROOT/automation/lib/dali.sh'
+  source '$ROOT/automation/lib/load_env.sh'
+  export WORKSPACE='$TESTWS'   # .env 의 WORKSPACE 덮어쓰기 무력화 (실 ledger 보호)
+  source '$ROOT/automation/lib/dali.sh'
   ledger_add vX.Y.Z && ledger_has vX.Y.Z && ! ledger_has vNOPE"
 
 ui_step "[selftest] 3) fix 범위 가드"
 source "$ROOT/automation/fix.sh" --lib
+export WORKSPACE="$TESTWS" # fix.sh 가 load_env 를 재소싱하며 .env 가 다시 덮어씀 — 재고정
 TREPO="$WORKSPACE/trepo"
 mkdir -p "$TREPO/src" "$TREPO/test"
 git -C "$TREPO" init -q

@@ -56,8 +56,9 @@ json.dump({"dali_ui": sys.argv[2], "core_adaptor": sys.argv[3], "a2ui_version": 
 ledger_add "$BOOT_DALI_UI_TAG"
 ui_ok "ledger 시드: $BOOT_DALI_UI_TAG"
 
-# 리포트용 요약 시트: baseline 자체 비교(diff 0)로 gallery_sheet 생성
-mkdir -p "$RUNDIR/compare"
+# 리포트용: 요약 시트(자기 비교, diff 0) + 개별 렌더(new/ 로 복사해 리포트가 집게)
+mkdir -p "$RUNDIR/compare" "$RUNDIR/new"
+cp "$BASE"/*.png "$RUNDIR/new/"
 python3 "$ROOT/tools/compare.py" --baseline "$BASE" --new "$BASE" --out "$RUNDIR/compare" \
   --threshold "$DIFF_THRESHOLD" >/dev/null || true
 

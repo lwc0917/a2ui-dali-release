@@ -14,6 +14,17 @@ DETAIL="${2:-}"
 
 ui_step "[report] 리포트 생성 ($OUTCOME)"
 
+# 렌더는 있는데 비교가 안 돈 실패(예: render 단계 중단)면 best-effort 비교를 돌려
+# '어떤 샘플이 어떻게 깨졌는지' side-by-side 카드를 리포트에 확보한다.
+if [ ! -f "$RUNDIR/compare/compare.json" ] \
+  && ls "$RUNDIR"/new/*.png >/dev/null 2>&1 \
+  && [ -d "$WORKSPACE/baseline" ]; then
+  mkdir -p "$RUNDIR/compare"
+  python3 "$ROOT/tools/compare.py" --baseline "$WORKSPACE/baseline" --new "$RUNDIR/new" \
+    --out "$RUNDIR/compare" --threshold "$DIFF_THRESHOLD" >/dev/null 2>&1 \
+    && ui_info "best-effort 비교로 부분 렌더 이미지 확보" || true
+fi
+
 # 실패 진단 (best-effort — 실패해도 리포트는 나감)
 DIAG_FILE="$RUNDIR/diagnosis.txt"
 case "$OUTCOME" in

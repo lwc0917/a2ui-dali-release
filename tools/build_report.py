@@ -6,6 +6,7 @@
   index.json: {"sections":[{"title":str,"items":[{"file":basename,"caption":str}]}]}
 """
 import argparse
+import glob
 import json
 import os
 import shutil
@@ -159,6 +160,25 @@ def main():
                                  f"판정 {v.get('verdict','미판정')}"})
     if items:
         sections.append({"title": "변경/손상 샘플 (baseline | new | diff)", "items": items})
+
+    # 성공 계열: 개별 렌더 전수 — 사람이 hub 에서 샘플별로 '잘 그려졌는지' 직접 확인
+    if args.outcome in ("success", "dry-run", "skipped", "bootstrap"):
+        singles = []
+        for p in sorted(glob.glob(os.path.join(rd, "new", "*.png"))):
+            name = os.path.splitext(os.path.basename(p))[0]
+            fn = "render_" + os.path.basename(p)
+            shutil.copy(p, os.path.join(args.artifacts, fn))
+            e = next((x for x in compare if x["name"] == name), None)
+            cap = name
+            if e and e.get("diff") is not None:
+                cap += f" · diff={e['diff']:.3f}"
+            if e and e["status"] != "PASS":
+                cap += f" · {verdicts.get(name, {}).get('verdict', 'REVIEW')}"
+            singles.append({"file": fn, "caption": cap})
+        if singles:
+            sections.append({"title": f"전체 샘플 개별 렌더 ({len(singles)}종)",
+                             "items": singles})
+
     if sections:
         with open(os.path.join(args.artifacts, "index.json"), "w") as f:
             json.dump({"sections": sections}, f, indent=1, ensure_ascii=False)
