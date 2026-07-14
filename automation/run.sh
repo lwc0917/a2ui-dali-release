@@ -106,10 +106,14 @@ released)
   ui_ok "[run] 완료 — v$NEW_VER 릴리스"
   ;;
 skipped)
-  rotate_baseline "$NEW_VER"
-  bash "$ROOT/automation/release_check.sh" --done "$DALI_UI_TAG"
+  if [ "$DRY_RUN" = "1" ]; then
+    ui_ok "[run] 완료 — 멱등 생략 (DRY_RUN: baseline/ledger 미변경)"
+  else
+    rotate_baseline "$NEW_VER"
+    bash "$ROOT/automation/release_check.sh" --done "$DALI_UI_TAG"
+    ui_ok "[run] 완료 — 멱등 생략 (이미 릴리스됨)"
+  fi
   bash "$ROOT/automation/report.sh" skipped ""
-  ui_ok "[run] 완료 — 멱등 생략 (이미 릴리스됨)"
   ;;
 dry-run)
   bash "$ROOT/automation/report.sh" dry-run ""

@@ -32,9 +32,8 @@ t "v2.5.28.10837 → dali_2.5.29 (정확 매치)" \
   test "$(pair_core_adaptor_tag v2.5.28.10837 2>/dev/null)" = "dali_2.5.29"
 t "v2.5.30.11000 → dali_2.5.29 (이하 최신 폴백)" \
   test "$(pair_core_adaptor_tag v2.5.30.11000 2>/dev/null)" = "dali_2.5.29"
-t "v0.0.1 → 폴백 불가 시 실패 리턴" \
-  bash -c '! '"$(declare -f pair_core_adaptor_tag _remote_tags _core_adaptor_common_tags)"'
-    pair_core_adaptor_tag v0.0.1 2>/dev/null'
+pair_must_fail() { ! pair_core_adaptor_tag v0.0.1 2>/dev/null; }
+t "v0.0.1 → 폴백 불가 시 실패 리턴" pair_must_fail
 
 ui_step "[selftest] 2) ledger"
 t "ledger_add 후 ledger_has" bash -c "

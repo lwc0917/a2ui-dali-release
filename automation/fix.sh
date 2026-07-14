@@ -40,12 +40,10 @@ attempts=$(cat "$ATT_FILE" 2>/dev/null || echo 0)
 case "$MODE" in
 build)
   LOG="${RUNDIR:-$WORKSPACE}/a2ui_build.log"
-  RETRY=(bash "$ROOT/automation/build_a2ui.sh" build)
   TASK="컴파일이 되도록 dali-ui API 변화를 적응"
   ;;
 conformance)
   LOG="${RUNDIR:-$WORKSPACE}/conformance.log"
-  RETRY=(bash "$ROOT/automation/conformance.sh")
   TASK="conformance 테스트가 전 항목 통과하도록 렌더러 동작을 복원"
   ;;
 *)
@@ -53,6 +51,17 @@ conformance)
   exit 2
   ;;
 esac
+
+# 수정 후 재검증 — conformance 도 반드시 '재빌드 후' 테스트 (수정 미반영 방지)
+retry_check() {
+  case "$MODE" in
+  build) bash "$ROOT/automation/build_a2ui.sh" build ;;
+  conformance)
+    bash "$ROOT/automation/build_a2ui.sh" build \
+      && bash "$ROOT/automation/conformance.sh"
+    ;;
+  esac
+}
 
 while [ "$attempts" -lt "$MAX_FIX_ATTEMPTS" ]; do
   attempts=$((attempts + 1))
@@ -82,7 +91,7 @@ $ERRTAIL"
     fix_scope_revert "$REPO" $bad
   fi
 
-  if "${RETRY[@]}"; then
+  if retry_check; then
     ui_ok "$MODE 수정 성공 (시도 $attempts, 변경 파일: $(git -C "$REPO" status --porcelain | wc -l)개)"
     exit 0
   fi

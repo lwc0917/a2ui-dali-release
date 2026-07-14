@@ -31,8 +31,13 @@ export GIT_AUTHOR_NAME="$GIT_RELEASE_NAME" GIT_AUTHOR_EMAIL="$GIT_RELEASE_EMAIL"
 
 net_retry git -C "$REPO" fetch --tags --force origin || { ui_err "fetch 실패"; exit 1; }
 
+# SKIP_IDEMPOTENCY=1 (리허설 전용, DRY_RUN 과 함께만 의미): 이미 릴리스된 태그로도
+# 버전 계산/CHANGELOG 초안 경로를 연습할 수 있게 멱등 가드를 건너뜀.
+: "${SKIP_IDEMPOTENCY:=0}"
+
 # 멱등 가드 1: origin/main 이 이미 이 dali-ui 태그로 릴리스됨 (ledger 유실 재실행 대비)
-if git -C "$REPO" show origin/main:README.md 2>/dev/null | grep -qF "$DALI_UI_TAG"; then
+if [ "$SKIP_IDEMPOTENCY" != "1" ] \
+  && git -C "$REPO" show origin/main:README.md 2>/dev/null | grep -qF "$DALI_UI_TAG"; then
   OLD=$(git -C "$REPO" show origin/main:CMakeLists.txt | grep -oE 'VERSION [0-9]+\.[0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
   write_release_json skipped "$OLD" "$OLD" none "origin/main 이 이미 $DALI_UI_TAG 기준 — 릴리스 생략(멱등)"
   ui_ok "origin/main 이 이미 $DALI_UI_TAG 기준 — 릴리스 생략(멱등)"
@@ -59,7 +64,8 @@ fi
 ui_info "버전: $OLD → $NEW ($BUMP, 코드변경=$CODE_CHANGED)"
 
 # 멱등 가드 2: 릴리스 태그가 이미 원격에 존재
-if [ -n "$(git -C "$REPO" ls-remote --tags origin "refs/tags/v$NEW")" ]; then
+if [ "$SKIP_IDEMPOTENCY" != "1" ] \
+  && [ -n "$(git -C "$REPO" ls-remote --tags origin "refs/tags/v$NEW")" ]; then
   write_release_json skipped "$OLD" "$NEW" "$BUMP" "v$NEW 태그가 이미 원격에 존재 — 생략(멱등)"
   ui_ok "v$NEW 이미 존재 — 릴리스 생략(멱등)"
   exit 0
