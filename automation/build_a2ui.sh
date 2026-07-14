@@ -14,6 +14,7 @@ checkout)
   REF="${2:-main}"
   ui_step "[a2ui] 소스 준비: $REF ($A2UI_GIT_REMOTE)"
   if [ -d "$REPO/.git" ]; then
+    git -C "$REPO" remote set-url origin "$A2UI_GIT_REMOTE" # .env 변경 반영
     net_retry git -C "$REPO" fetch --tags --force origin || { ui_err "fetch 실패"; exit 1; }
   else
     net_retry git clone "$A2UI_GIT_REMOTE" "$REPO" || { ui_err "clone 실패"; exit 1; }

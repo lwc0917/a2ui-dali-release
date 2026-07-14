@@ -35,6 +35,7 @@ EOF
 
 clone_or_fetch() { # $1=url $2=dir
   if [ -d "$2/.git" ]; then
+    git -C "$2" remote set-url origin "$1" # .env 의 repo URL 변경이 기존 클론에도 반영되게
     net_retry git -C "$2" fetch --tags --force origin
   else
     net_retry git clone "$1" "$2"

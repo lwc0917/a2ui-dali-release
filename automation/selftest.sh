@@ -35,6 +35,16 @@ t "v2.5.30.11000 → dali_2.5.29 (이하 최신 폴백)" \
 pair_must_fail() { ! pair_core_adaptor_tag v0.0.1 2>/dev/null; }
 t "v0.0.1 → 폴백 불가 시 실패 리턴" pair_must_fail
 
+ui_step "[selftest] 1b) 자동 타깃 선정 (exact-pair only, 실측 2.5.30 사례)"
+dali_ui_tags_desc() { printf 'v2.5.30.10887\nv2.5.29.10863\nv2.5.29.10862\nv2.5.28.10837\n'; }
+_core_adaptor_common_tags() { printf 'dali_2.5.29\ndali_2.5.30\n'; }
+ledger_add v2.5.28.10837
+t "페어 없는 2.5.30 은 대기, 2.5.29.10863+dali_2.5.30 선정" \
+  test "$(select_processable_target 2>/dev/null)" = "v2.5.29.10863 dali_2.5.30"
+ledger_add v2.5.29.10863
+select_none() { ! select_processable_target >/dev/null 2>&1; }
+t "처리 가능분이 모두 ledger 에 있으면 후보 없음" select_none
+
 ui_step "[selftest] 2) ledger"
 t "ledger_add 후 ledger_has" bash -c "
   source '$ROOT/automation/lib/load_env.sh'; source '$ROOT/automation/lib/dali.sh'

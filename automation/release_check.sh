@@ -16,26 +16,35 @@ if [ "${1:-}" = "--done" ]; then
 fi
 
 ui_step "[release_check] dali-ui 새 릴리스 태그 확인"
-if [ -n "$FORCE_TARGET" ]; then
-  TAG="$FORCE_TARGET"
-  ui_warn "FORCE_TARGET=$TAG (ledger 무시, 강제 재처리)"
-else
-  TAG=$(latest_dali_ui_tag) || { ui_err "dali-ui 태그 조회 실패 ($DALI_UI_REPO)"; exit 2; }
-  ui_info "최신 dali-ui 태그: $TAG"
-  if ledger_has "$TAG"; then
-    ui_ok "$TAG 은 이미 처리됨 — 할 일 없음"
-    exit 3
-  fi
-fi
-
 PAIR_WARN="$WORKSPACE/.pair.warn"
 : >"$PAIR_WARN"
-PAIR=$(pair_core_adaptor_tag "$TAG" 2>"$PAIR_WARN") || {
-  [ -s "$PAIR_WARN" ] && ui_err "$(cat "$PAIR_WARN")"
-  ui_err "core/adaptor 페어링 실패: $TAG"
-  exit 2
-}
-[ -s "$PAIR_WARN" ] && ui_warn "$(cat "$PAIR_WARN")"
+if [ -n "$FORCE_TARGET" ]; then
+  # 사람이 명시한 태그 — exact 페어가 없으면 이하 최신으로 폴백 허용
+  TAG="$FORCE_TARGET"
+  ui_warn "FORCE_TARGET=$TAG (ledger 무시, 강제 재처리)"
+  PAIR=$(pair_core_adaptor_tag "$TAG" 2>"$PAIR_WARN") || {
+    [ -s "$PAIR_WARN" ] && ui_err "$(cat "$PAIR_WARN")"
+    ui_err "core/adaptor 페어링 실패: $TAG"
+    exit 2
+  }
+  [ -s "$PAIR_WARN" ] && ui_warn "$(cat "$PAIR_WARN")"
+else
+  # 자동 경로 — '정확한 페어가 존재하는' 최신 미처리 태그만 타깃.
+  # (dali-ui 가 core/adaptor 보다 앞서 태그되면 그 태그는 페어가 나올 때까지 대기 —
+  #  실측: dali-ui 2.5.30 을 core 2.5.30 으로 빌드하면 컴파일 실패)
+  SEL=$(select_processable_target 2>"$PAIR_WARN")
+  rc=$?
+  [ -s "$PAIR_WARN" ] && while IFS= read -r line; do ui_info "$line"; done <"$PAIR_WARN"
+  if [ $rc -eq 2 ]; then
+    ui_err "dali-ui/core/adaptor 태그 조회 실패"
+    exit 2
+  elif [ $rc -ne 0 ]; then
+    ui_ok "처리 가능한 새 dali-ui 태그 없음 — 할 일 없음"
+    exit 3
+  fi
+  TAG=${SEL%% *}
+  PAIR=${SEL##* }
+fi
 
 cat >"$WORKSPACE/.target" <<EOF
 DALI_UI_TAG=$TAG

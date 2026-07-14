@@ -138,24 +138,28 @@ sub_file(f"{repo}/packaging/a2ui-dali.spec",
          lambda t: re.sub(r"(?m)^Version:\s*\S+", f"Version:    {new}", t, count=1))
 
 # README 호환표: '## Highlights' 이전 블록에서 옛 core 태그(dali_X.Y.Z)와
-# 옛 dali-ui 태그(vX.Y.Z.B), 그 minor 문자열 쌍을 새 값으로 치환
+# 옛 dali-ui 태그(vX.Y.Z.B), 그 minor 문자열 쌍을 새 값으로 치환.
+# ※ 2단계 토큰 치환 — 새로 넣은 값(예: v2.5.29.…)이 다른 old 문자열(core minor
+#   2.5.29)과 겹쳐 연쇄 치환되는 사고를 막는다 (실측 버그).
 def fix_readme(t):
     cut = t.find("## Highlights")
     head, tail = (t[:cut], t[cut:]) if cut > 0 else (t, "")
     old_core = re.search(r"dali_\d+\.\d+\.\d+", head)
     old_ui = re.search(r"v\d+\.\d+\.\d+\.\d+", head)
-    if old_core:
-        head = head.replace(old_core.group(0), core_tag)
+    pairs = []
     if old_ui:
-        head = head.replace(old_ui.group(0), ui_tag)
-        # 산문 속 minor 쌍: "pair dali-ui 2.5.28 with core/adaptor 2.5.29"
-        old_ui_minor = ".".join(old_ui.group(0)[1:].split(".")[:3])
-        new_ui_minor = ".".join(ui_tag[1:].split(".")[:3])
-        head = head.replace(old_ui_minor, new_ui_minor)
+        out = old_ui.group(0)
+        pairs.append((out, ui_tag))
+        pairs.append((".".join(out[1:].split(".")[:3]), ".".join(ui_tag[1:].split(".")[:3])))
     if old_core:
-        old_core_minor = old_core.group(0)[len("dali_"):]
-        new_core_minor = core_tag[len("dali_"):]
-        head = head.replace(old_core_minor, new_core_minor)
+        oct_ = old_core.group(0)
+        pairs.append((oct_, core_tag))
+        pairs.append((oct_[len("dali_"):], core_tag[len("dali_"):]))
+    pairs.sort(key=lambda p: -len(p[0]))  # 긴 문자열(태그) 먼저 — minor 는 태그의 부분문자열
+    for i, (old_s, _) in enumerate(pairs):
+        head = head.replace(old_s, f"\x00SUB{i}\x00")
+    for i, (_, new_s) in enumerate(pairs):
+        head = head.replace(f"\x00SUB{i}\x00", new_s)
     return head + tail
 sub_file(f"{repo}/README.md", fix_readme)
 
