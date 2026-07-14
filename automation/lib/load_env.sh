@@ -40,8 +40,27 @@ fi
 : "${RENDER_W:=480}"
 : "${RENDER_H:=1280}"
 : "${RENDER_WAIT:=5}"
-: "${DIFF_THRESHOLD:=0.05}"
 : "${MAX_FIX_ATTEMPTS:=3}"
+
+# 게이트 강도 — hub run 입력(env_from_inputs) 또는 env 로 지정.
+#  strict  : 사람 눈에 띄는 변화면 차단   (픽셀 탐지 기본 0.02)
+#  normal  : 구조 훼손만 차단 (기본)       (0.05)
+#  lenient : 치명 파손만 차단              (0.30)
+: "${GATE_LEVEL:=normal}"
+case "$GATE_LEVEL" in strict | normal | lenient) : ;; *) GATE_LEVEL=normal ;; esac
+# hub 입력은 미지정 시 빈 문자열로 오므로 비어있지 않을 때만 반영
+[ -n "${DIFF_THRESHOLD_INPUT:-}" ] && DIFF_THRESHOLD="$DIFF_THRESHOLD_INPUT"
+case "${DRY_RUN_INPUT:-}" in true | 1) DRY_RUN=1 ;; esac
+: "${FORCE_ACCEPT:=0}"
+case "${FORCE_ACCEPT_INPUT:-}" in true | 1) FORCE_ACCEPT=1 ;; esac
+export FORCE_ACCEPT
+if [ -z "${DIFF_THRESHOLD:-}" ]; then
+  case "$GATE_LEVEL" in
+  strict) DIFF_THRESHOLD=0.02 ;;
+  lenient) DIFF_THRESHOLD=0.30 ;;
+  *) DIFF_THRESHOLD=0.05 ;;
+  esac
+fi
 
 # ── Claude 에스컬레이션 ─────────────────────────────────────────
 : "${CLAUDE_MODEL:=opus}"
@@ -56,7 +75,7 @@ fi
 export WORKSPACE PREFIX SETENV SRC \
        A2UI_GIT_REMOTE GIT_RELEASE_NAME GIT_RELEASE_EMAIL \
        DALI_UI_REPO DALI_CORE_REPO DALI_ADAPTOR_REPO \
-       RENDER_W RENDER_H RENDER_WAIT DIFF_THRESHOLD MAX_FIX_ATTEMPTS \
+       RENDER_W RENDER_H RENDER_WAIT GATE_LEVEL DIFF_THRESHOLD MAX_FIX_ATTEMPTS \
        CLAUDE_MODEL CLAUDE_TIMEOUT DRY_RUN FORCE_TARGET FORCE_REBUILD JOBS
 
 mkdir -p "$WORKSPACE" "$SRC"

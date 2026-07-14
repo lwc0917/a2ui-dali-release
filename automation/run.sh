@@ -19,6 +19,8 @@ fail() { # $1=outcome $2=detail
 }
 
 ui_step "[run] a2ui-dali 자동 릴리스 워크플로 시작 (run=$RUN_ID)"
+ui_info "게이트 설정: level=$GATE_LEVEL · 픽셀 임계 $DIFF_THRESHOLD · DRY_RUN=$DRY_RUN · FORCE_ACCEPT=${FORCE_ACCEPT:-0}"
+printf 'GATE_LEVEL=%s\nDIFF_THRESHOLD=%s\n' "$GATE_LEVEL" "$DIFF_THRESHOLD" >"$RUNDIR/gate.env"
 
 # ── [lock] 동시 실행 금지 (hub single_flight + 이중 안전벨트) ──
 exec 9>"$WORKSPACE/.run.lock"

@@ -61,8 +61,22 @@ FORCE_TARGET=v2.5.28.10837 DRY_RUN=1 bash automation/run.sh  # 전체 리허설 
 bash automation/run.sh                                       # 실전과 동일
 ```
 
+### 게이트 강도 — hub Run 폼 인자로 조절
+
+hub 에서 실행할 때(수동 실행 또는 API `params`) 아래 인자를 줄 수 있다 (`agent.yaml inputs`):
+
+| 인자 | 값 | 의미 |
+|---|---|---|
+| `gate_level` | `strict` / `normal`(기본) / `lenient` | **얼마나 빡세게 볼지.** strict=사람 눈에 띄는 변화면 차단(픽셀 탐지 0.02), normal=구조 훼손(겹침·미렌더·잘림)만 차단(0.05), lenient=치명 파손(빈 화면·전면 미렌더)만 차단(0.30). 픽셀 임계는 "변경 탐지" 민감도이고, 차단 여부는 해당 강도의 기준으로 Claude 비전이 판정 |
+| `diff_threshold` | 예: `0.10` | 픽셀 탐지 임계값 직접 지정 (mean-abs-diff, 0~255 스케일) — 레벨 기본값보다 우선 |
+| `dry_run` | true/false | 리허설 (push/baseline/ledger 미변경) |
+| `force_accept` | true/false | 게이트 RED 1회 수동 승인 — **이전 실패 리포트의 이미지를 확인한 뒤에만** |
+
+같은 값들은 로컬 실행 시 env 로도 지정 가능:
+
 | env | 효과 |
 |---|---|
+| `GATE_LEVEL=strict\|normal\|lenient` | 위 게이트 강도와 동일 |
 | `DRY_RUN=1` | 커밋/태그/push/baseline 회전/ledger 기록 생략 (리포트는 생성) |
 | `FORCE_TARGET=vA.B.C.N` | ledger 무시하고 해당 dali-ui 태그 재처리 |
 | `FORCE_REBUILD=1` | 스택 스탬프 무시하고 클린 재빌드 |

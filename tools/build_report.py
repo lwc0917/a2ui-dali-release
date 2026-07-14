@@ -111,6 +111,14 @@ def main():
                          f"**v{release['new_version']}** ({release.get('bump','?')}) · "
                          f"상태: {release.get('status','?')}")
         lines.append(f"- Conformance: {conf} · Claude 코드수정 시도: {fix_n}회")
+        gate_env = {}
+        for line in read_text(os.path.join(rd, "gate.env")).splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                gate_env[k] = v
+        if gate_env:
+            lines.append(f"- 게이트 강도: **{gate_env.get('GATE_LEVEL', 'normal')}** "
+                         f"(픽셀 임계 {gate_env.get('DIFF_THRESHOLD', '?')})")
         lines.append("")
 
     # ── 게이트 ──

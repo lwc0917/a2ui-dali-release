@@ -13,7 +13,23 @@ CDIR="${1:?compare dir}"
 COMPARE_JSON="$CDIR/compare.json"
 [ -f "$COMPARE_JSON" ] || { ui_err "compare.json 없음: $CDIR"; echo RED; exit 0; }
 
-ui_step "[judge] REVIEW 샘플 시각 판정"
+# 게이트 강도별 판정 기준 (gate_level run 입력 → GATE_LEVEL)
+case "$GATE_LEVEL" in
+strict)
+  CRITERIA="- DAMAGED = 사람 눈에 띄는 모든 변화: 레이아웃/크기/위치/정렬 변화, 요소 이동, 폰트 굵기 변화 등.
+- ACCEPTABLE = 서브픽셀 안티앨리어싱 노이즈처럼 확대해야 보이는 차이만."
+  ;;
+lenient)
+  CRITERIA="- DAMAGED = 치명 파손만: 빈 화면, 텍스트/이미지 전면 미렌더, 요소가 겹쳐 내용을 읽을 수 없는 수준, 카드 밖으로 내용 이탈.
+- ACCEPTABLE = 그 외 전부 — 크기/위치/정렬 드리프트, 색·폰트 차이는 내용이 온전하면 허용."
+  ;;
+*)
+  CRITERIA="- DAMAGED = 레이아웃 붕괴, 요소 겹침, 텍스트/이미지 미렌더, 내용 잘림, 빈 화면.
+- ACCEPTABLE = 서브픽셀 안티앨리어싱, 미세한 폰트 렌더링 차이, 1~2px 위치 이동, 미세한 색 변화 등 사람 눈에 문제 없는 드리프트."
+  ;;
+esac
+
+ui_step "[judge] REVIEW 샘플 시각 판정 (강도: $GATE_LEVEL)"
 mapfile -t REVIEWS < <(python3 -c '
 import json, sys
 for e in json.load(open(sys.argv[1])):
@@ -35,9 +51,8 @@ else
     prompt="당신은 UI 렌더링 회귀 판정자입니다. 파일 $card 를 Read 도구로 열어 보세요.
 왼쪽 패널=이전 릴리스(baseline), 가운데=새 빌드(new), 오른쪽(있다면)=diff 히트맵(빨강=변경 영역).
 비교 사유: $reason
-새 빌드가 '심각한 훼손'인지 판정하세요.
-- DAMAGED = 레이아웃 붕괴, 요소 겹침, 텍스트/이미지 미렌더, 내용 잘림, 빈 화면.
-- ACCEPTABLE = 서브픽셀 안티앨리어싱, 미세한 폰트 렌더링 차이, 1~2px 위치 이동, 미세한 색 변화 등 사람 눈에 문제 없는 드리프트.
+아래 기준으로 새 빌드를 판정하세요 (게이트 강도: $GATE_LEVEL).
+$CRITERIA
 답변 형식: 첫 줄에 정확히 한 단어 DAMAGED 또는 ACCEPTABLE. 둘째 줄에 근거 한 문장(한국어)."
     verdict="DAMAGED" # 보수 기본값
     rationale="판정 실패(호출/파싱 불가) — 보수적으로 차단"

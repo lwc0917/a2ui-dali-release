@@ -56,6 +56,23 @@ ledger_add v2.5.29.10863
 select_none() { ! select_processable_target >/dev/null 2>&1; }
 t "처리 가능분이 모두 ledger 에 있으면 후보 없음" select_none
 
+ui_step "[selftest] 1c) 게이트 강도 입력 매핑 (hub run 인자)"
+gate_map() { # $1=GATE_LEVEL [$2=DIFF_THRESHOLD_INPUT] → 유효 threshold 출력
+  bash -c "
+    export GATE_LEVEL='$1' DIFF_THRESHOLD_INPUT='${2:-}' DIFF_THRESHOLD=
+    source '$ROOT/automation/lib/load_env.sh'
+    echo \"\$GATE_LEVEL \$DIFF_THRESHOLD\""
+}
+t "strict → 0.02" test "$(gate_map strict)" = "strict 0.02"
+t "normal → 0.05" test "$(gate_map normal)" = "normal 0.05"
+t "lenient → 0.30" test "$(gate_map lenient)" = "lenient 0.30"
+t "직접 지정이 레벨 기본값보다 우선" test "$(gate_map lenient 0.10)" = "lenient 0.10"
+t "미지정/이상값 → normal 폴백" test "$(gate_map weird)" = "normal 0.05"
+t "force_accept 입력 매핑" bash -c "
+  export FORCE_ACCEPT_INPUT=true
+  source '$ROOT/automation/lib/load_env.sh'
+  [ \"\$FORCE_ACCEPT\" = 1 ]"
+
 ui_step "[selftest] 2) ledger"
 t "ledger_add 후 ledger_has" bash -c "
   source '$ROOT/automation/lib/load_env.sh'

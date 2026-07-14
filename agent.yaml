@@ -13,10 +13,35 @@ confirm_before_run: false
 # 단일 워크스페이스 + 수십 분 스택 빌드 → 동시 실행 금지.
 single_flight: true
 
+# Run 폼/API 인자 — 시각 게이트를 얼마나 빡세게 볼지 실행 시점에 지정.
+inputs:
+  - name: gate_level
+    type: enum
+    choices: ["strict", "normal", "lenient"]
+    default: "normal"
+    description: "시각 게이트 강도. strict=사람 눈에 띄는 변화면 차단(탐지 0.02) / normal=구조 훼손(겹침·미렌더·잘림)만 차단(0.05) / lenient=치명 파손(빈 화면·전면 미렌더)만 차단(0.30)"
+  - name: diff_threshold
+    type: string
+    required: false
+    description: "픽셀 탐지 임계값 직접 지정 (mean-abs-diff 0~255 스케일, 예: 0.10) — 비우면 gate_level 의 기본값"
+  - name: dry_run
+    type: bool
+    default: false
+    description: "리허설 — 게이트까지 전부 수행하되 커밋/태그/push/baseline/ledger 는 변경하지 않음"
+  - name: force_accept
+    type: bool
+    default: false
+    description: "게이트 RED 1회 수동 승인 — 이전 실패 리포트의 side-by-side 이미지를 사람이 확인한 뒤에만 사용"
+
 runner:
   type: subprocess
   command: ["bash", "automation/run.sh"]
   cwd: "."
+  env_from_inputs:
+    GATE_LEVEL: "${input.gate_level}"
+    DIFF_THRESHOLD_INPUT: "${input.diff_threshold}"
+    DRY_RUN_INPUT: "${input.dry_run}"
+    FORCE_ACCEPT_INPUT: "${input.force_accept}"
   # dali-core/adaptor/ui 3종 풀빌드 + 36종 렌더 + Claude 적응 루프 → 여유 있게 3시간.
   timeout_seconds: 10800
   logs:
