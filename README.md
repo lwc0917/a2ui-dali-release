@@ -66,6 +66,18 @@ bash automation/run.sh                                       # 실전과 동일
 | `DRY_RUN=1` | 커밋/태그/push/baseline 회전/ledger 기록 생략 (리포트는 생성) |
 | `FORCE_TARGET=vA.B.C.N` | ledger 무시하고 해당 dali-ui 태그 재처리 |
 | `FORCE_REBUILD=1` | 스택 스탬프 무시하고 클린 재빌드 |
+| `FORCE_ACCEPT=1` | 게이트 RED 를 1회성 수동 승인하고 릴리스 진행 — **사람이 side-by-side 이미지를 직접 확인한 뒤에만** 사용 (의도된 렌더 변화일 때) |
+| `SKIP_IDEMPOTENCY=1` | (리허설 전용, DRY_RUN 과 함께) 멱등 가드 우회해 버전 계산/CHANGELOG 경로 연습 |
+
+### 게이트 RED 가 떴는데 의도된 변화라면?
+
+run 페이지의 side-by-side 이미지를 확인한 뒤, 정말 문제 없으면 hub 에이전트 디렉토리에서:
+
+```bash
+FORCE_ACCEPT=1 bash automation/run.sh   # 판정 기록은 리포트에 남긴 채 릴리스 진행
+```
+
+릴리스 성공 시 새 렌더가 baseline 이 되므로 같은 변화로 다시 RED 가 뜨지 않는다.
 
 ## 안전장치
 

@@ -72,9 +72,16 @@ bash "$ROOT/automation/compare.sh" "$WORKSPACE/baseline" "$RUNDIR/new" "$RUNDIR/
 # ── [judge] ── (judge 의 진행 로그는 stderr 로 그대로, 마지막 줄만 판정)
 GATE=$(bash "$ROOT/automation/judge.sh" "$RUNDIR/compare" | tee /dev/stderr | tail -1)
 if [ "$GATE" != "GREEN" ]; then
-  fail gate-damage "시각 게이트 RED — 손상 판정 샘플 존재 (리포트 참조)"
+  # FORCE_ACCEPT=1: RED 를 사람이 side-by-side 로 확인하고 의도된 변화로 승인했을 때의
+  # 1회성 수동 오버라이드 (예: 렌더러 개선 커밋으로 기준선이 정당하게 달라진 경우).
+  if [ "${FORCE_ACCEPT:-0}" = "1" ]; then
+    ui_warn "게이트 RED 를 FORCE_ACCEPT=1 로 수동 승인 — 릴리스 진행 (판정 기록은 리포트에 유지)"
+  else
+    fail gate-damage "시각 게이트 RED — 손상 판정 샘플 존재 (리포트 참조)"
+  fi
+else
+  ui_ok "게이트 GREEN"
 fi
-ui_ok "게이트 GREEN"
 
 # ── [release] ──
 bash "$ROOT/automation/release.sh" || fail release-push "릴리스 커밋/태그/push 실패"
