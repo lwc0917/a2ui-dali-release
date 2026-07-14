@@ -38,7 +38,11 @@ net_retry git -C "$REPO" fetch --tags --force origin || { ui_err "fetch 실패";
 # 멱등 가드 1: origin/main 이 이미 이 dali-ui 태그로 릴리스됨 (ledger 유실 재실행 대비)
 if [ "$SKIP_IDEMPOTENCY" != "1" ] \
   && git -C "$REPO" show origin/main:README.md 2>/dev/null | grep -qF "$DALI_UI_TAG"; then
-  OLD=$(git -C "$REPO" show origin/main:CMakeLists.txt | grep -oE 'VERSION [0-9]+\.[0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
+  OLD=$(git -C "$REPO" show origin/main:CMakeLists.txt | python3 -c '
+import re, sys
+m = re.search(r"PROJECT\s*\([^)]*?VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)", sys.stdin.read(), re.S | re.I)
+print(m.group(1) if m else "?")
+')
   write_release_json skipped "$OLD" "$OLD" none "origin/main 이 이미 $DALI_UI_TAG 기준 — 릴리스 생략(멱등)"
   ui_ok "origin/main 이 이미 $DALI_UI_TAG 기준 — 릴리스 생략(멱등)"
   exit 0
@@ -53,8 +57,14 @@ fi
 CODE_CHANGED=0
 [ -n "$(git -C "$REPO" status --porcelain -- src)" ] && CODE_CHANGED=1
 
-OLD=$(grep -oE 'VERSION [0-9]+\.[0-9]+\.[0-9]+' "$REPO/CMakeLists.txt" | head -1 | awk '{print $2}')
-[ -n "$OLD" ] || { ui_err "현재 버전 파싱 실패 (CMakeLists.txt)"; exit 1; }
+# PROJECT(...) 블록의 VERSION 만 — 1행 CMAKE_MINIMUM_REQUIRED(VERSION 3.x) 오인 방지
+OLD=$(python3 -c '
+import re, sys
+t = open(sys.argv[1]).read()
+m = re.search(r"PROJECT\s*\([^)]*?VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)", t, re.S | re.I)
+print(m.group(1) if m else "")
+' "$REPO/CMakeLists.txt")
+[ -n "$OLD" ] || { ui_err "현재 버전 파싱 실패 (CMakeLists.txt PROJECT VERSION)"; exit 1; }
 IFS=. read -r VA VB VC <<<"$OLD"
 if [ "$CODE_CHANGED" = 1 ]; then
   NEW="$VA.$((VB + 1)).0" BUMP=minor
