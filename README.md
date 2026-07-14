@@ -34,6 +34,10 @@ Humans review the image report in the agent hub.
 
 ## 설치 (uifw-agent-hub)
 
+> 🏢 **사내 배포는 [`handoff/HANDOFF.md`](handoff/HANDOFF.md) 를 따르세요** — 호스트
+> 전제조건, **hub 이미지 갤러리 확장 패치**(`handoff/agenthub-artifact-gallery.patch`,
+> 미적용 시 리포트에 이미지가 안 뜸), 첫 두 사이클의 기대 동작, 트러블슈팅 포함.
+
 ```bash
 # 1) 허브 agents/ 에 클론 (30초 내 자동 발견)
 git clone <this-repo> ~/tizen/uifw-agent-hub/agents/a2ui-dali-release

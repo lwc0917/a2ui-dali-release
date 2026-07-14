@@ -1,0 +1,298 @@
+diff --git a/src/agenthub/web/templates/components/artifact_gallery.html b/src/agenthub/web/templates/components/artifact_gallery.html
+new file mode 100644
+index 0000000..fbbe57a
+--- /dev/null
++++ b/src/agenthub/web/templates/components/artifact_gallery.html
+@@ -0,0 +1,34 @@
++{# Per-run artifact image gallery (agents that produce visual reports, e.g.
++   a2ui-dali-release).
++
++   SECURITY: `artifacts` comes from views._run_artifacts(), which parses the
++   agent-written artifacts/index.json and keeps only plain-basename filenames of
++   EXISTING image files under the run's artifacts dir. Agent strings
++   (title/caption/filename) are emitted ONLY via Jinja auto-escaping; the <img>
++   tag and its src are hub-generated markup served by the authed
++   /runs/{id}/artifacts/{file} route — the escape-first invariant ("never emit a
++   tag derived from agent content") holds. #}
++{% if artifacts %}
++<div class="artifact-gallery">
++  <style>
++    .artifact-gallery .ag-title { margin: 14px 0 8px; font-size: 1em; }
++    .artifact-gallery .ag-grid { display: flex; flex-wrap: wrap; gap: 12px; }
++    .artifact-gallery figure { margin: 0; max-width: 100%; }
++    .artifact-gallery img { max-width: 100%; height: auto; border: 1px solid rgba(127,127,127,.35); border-radius: 6px; background: #fff; }
++    .artifact-gallery figcaption { font-size: .85em; opacity: .75; margin-top: 4px; max-width: 480px; }
++  </style>
++  {% for sec in artifacts %}
++  <h3 class="ag-title">{{ sec.title }}</h3>
++  <div class="ag-grid">
++    {% for it in sec['items'] %}
++    <figure>
++      <a href="/runs/{{ run.id }}/artifacts/{{ it.file }}" target="_blank" rel="noopener">
++        <img loading="lazy" src="/runs/{{ run.id }}/artifacts/{{ it.file }}" alt="{{ it.caption }}">
++      </a>
++      <figcaption>{{ it.caption }}</figcaption>
++    </figure>
++    {% endfor %}
++  </div>
++  {% endfor %}
++</div>
++{% endif %}
+diff --git a/src/agenthub/web/templates/components/result_card.html b/src/agenthub/web/templates/components/result_card.html
+index ca9ab53..67add20 100644
+--- a/src/agenthub/web/templates/components/result_card.html
++++ b/src/agenthub/web/templates/components/result_card.html
+@@ -14,4 +14,5 @@
+   {% else %}
+     <p class="muted">{{ t('run.no_result') }}</p>
+   {% endif %}
++  {% include "components/artifact_gallery.html" %}
+ </div>
+diff --git a/src/agenthub/web/templates/run.html b/src/agenthub/web/templates/run.html
+index 8d76931..2ce5978 100644
+--- a/src/agenthub/web/templates/run.html
++++ b/src/agenthub/web/templates/run.html
+@@ -160,6 +160,7 @@
+       {% else %}
+         <p class="muted">{{ t('run.no_result') }}</p>
+       {% endif %}
++      {% include "components/artifact_gallery.html" %}
+     {% endif %}
+   </div>
+ </section>
+diff --git a/src/agenthub/web/views.py b/src/agenthub/web/views.py
+index a8398ff..19f999e 100644
+--- a/src/agenthub/web/views.py
++++ b/src/agenthub/web/views.py
+@@ -25,6 +25,7 @@ live log pane sets text via ``textContent`` client-side (see ``run.html``).
+ from __future__ import annotations
+ 
+ import html
++import json
+ import re
+ from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+@@ -32,7 +33,12 @@ from typing import Annotated
+ from urllib.parse import parse_qsl
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Request
+-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
++from fastapi.responses import (
++    FileResponse,
++    HTMLResponse,
++    PlainTextResponse,
++    RedirectResponse,
++)
+ from fastapi.templating import Jinja2Templates
+ from sqlalchemy import func, select
+ from sqlalchemy.orm import Session
+@@ -470,6 +476,55 @@ def _stored_result(run: Run) -> tuple[str | None, str | None]:
+         return None, run.result_content_type
+ 
+ 
++# Image types served from a run's artifacts dir. No svg — it can carry
++# same-origin script when navigated to directly.
++_ARTIFACT_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
++
++
++def _run_artifacts(run_id: str) -> list[dict]:
++    """Image-gallery sections declared by a run's ``artifacts/index.json``.
++
++    An agent may drop image files plus an ``index.json``
++    (``{"sections": [{"title", "items": [{"file", "caption"}]}]}``) into
++    ``$AGENTHUB_RUN_DIR/artifacts/``. Only hub-validated data reaches the
++    template: filenames must be plain basenames of existing image files under
++    the run's artifacts dir, and agent strings (title/caption) are emitted only
++    through Jinja auto-escaping — the ``<img>`` markup and its ``src`` are
++    hub-generated, so the "renderer never emits a tag derived from agent
++    content" invariant is preserved.
++    """
++    root = get_settings().runs_dir / run_id / "artifacts"
++    try:
++        data = json.loads((root / "index.json").read_text(encoding="utf-8"))
++    except (OSError, json.JSONDecodeError):
++        return []
++    sections: list[dict] = []
++    for sec in data.get("sections", []) if isinstance(data, dict) else []:
++        if not isinstance(sec, dict):
++            continue
++        items: list[dict] = []
++        for it in sec.get("items", []):
++            if not isinstance(it, dict):
++                continue
++            name = it.get("file")
++            if (
++                not isinstance(name, str)
++                or not name
++                or "/" in name
++                or "\\" in name
++                or name.startswith(".")
++            ):
++                continue
++            if Path(name).suffix.lower() not in _ARTIFACT_IMAGE_SUFFIXES:
++                continue
++            if not (root / name).is_file():
++                continue
++            items.append({"file": name, "caption": str(it.get("caption", ""))})
++        if items:
++            sections.append({"title": str(sec.get("title", "")), "items": items})
++    return sections
++
++
+ def _action_is_available(action, run: Run) -> bool:
+     """Whether a declared follow-up action should be offered for *run* (iter-5).
+ 
+@@ -1873,6 +1928,7 @@ def run_page(
+             "parent_run_id": parent_run_id,
+             "preloaded_log": preloaded_log,
+             "result_html": result_html,
++            "artifacts": _run_artifacts(run_id) if is_terminal else [],
+             "estimated_duration": _format_duration_hint(estimated_seconds),
+             "timeline_events": timeline_events,
+             **_user_ctx(user),
+@@ -1898,6 +1954,26 @@ def run_log_download(run_id: str, session: SessionDep) -> PlainTextResponse:
+     )
+ 
+ 
++@router.get("/runs/{run_id}/artifacts/{path:path}")
++def run_artifact(run_id: str, path: str, session: SessionDep) -> FileResponse:
++    """Serve one per-run artifact image (see ``_run_artifacts``).
++
++    Authenticated like every views route (router-level dependency) — never a
++    ``StaticFiles`` mount, which would bypass that auth. Path traversal is
++    blocked by resolving under the run's artifacts dir; only image suffixes
++    are served. 404 for anything else.
++    """
++    if session.get(Run, run_id) is None:
++        raise HTTPException(status_code=404, detail="run not found")
++    root = (get_settings().runs_dir / run_id / "artifacts").resolve()
++    target = (root / path).resolve()
++    if root not in target.parents or not target.is_file():
++        raise HTTPException(status_code=404, detail="artifact not found")
++    if target.suffix.lower() not in _ARTIFACT_IMAGE_SUFFIXES:
++        raise HTTPException(status_code=404, detail="unsupported artifact type")
++    return FileResponse(target)
++
++
+ @router.get("/runs/{run_id}/timeline", response_class=HTMLResponse)
+ def run_timeline_fragment(
+     run_id: str, request: Request, session: SessionDep
+@@ -1940,6 +2016,7 @@ def run_result_card(run_id: str, request: Request, session: SessionDep) -> HTMLR
+             "run": run,
+             "result_html": result_html,
+             "has_result": bool(result_html),
++            "artifacts": _run_artifacts(run_id),
+             **_i18n_ctx(request),
+         },
+     )
+diff --git a/tests/smoke/test_run_artifacts.py b/tests/smoke/test_run_artifacts.py
+new file mode 100644
+index 0000000..48a5a60
+--- /dev/null
++++ b/tests/smoke/test_run_artifacts.py
+@@ -0,0 +1,105 @@
++"""Per-run artifact image gallery: index.json validation + authed file route."""
++
++from __future__ import annotations
++
++import json
++
++from agenthub.config import get_settings
++from agenthub.db import SessionLocal
++from agenthub.models import Agent, Run, _utcnow
++
++# 1x1 red PNG
++_PNG = bytes.fromhex(
++    "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de"
++    "0000000c4944415408d763f8cfc000000301010018dd8db00000000049454e44ae426082"
++)
++
++
++def _run_with_artifacts(index: dict | None, files: dict[str, bytes]) -> str:
++    with SessionLocal() as s:
++        if s.get(Agent, "echo") is None:
++            s.add(Agent(id="echo", name="Echo", version="0.0.0", manifest_path="-"))
++        run = Run(
++            agent_id="echo", status="succeeded", params={}, created_by="op@x", finished_at=_utcnow()
++        )
++        s.add(run)
++        s.commit()
++        rid = run.id
++    d = get_settings().runs_dir / rid / "artifacts"
++    d.mkdir(parents=True, exist_ok=True)
++    if index is not None:
++        (d / "index.json").write_text(json.dumps(index), encoding="utf-8")
++    for name, data in files.items():
++        (d / name).write_bytes(data)
++    return rid
++
++
++def test_artifact_route_serves_image(client):
++    rid = _run_with_artifacts(None, {"sheet.png": _PNG})
++    r = client.get(f"/runs/{rid}/artifacts/sheet.png")
++    assert r.status_code == 200
++    assert r.content == _PNG
++
++
++def test_artifact_route_404s(client):
++    rid = _run_with_artifacts(None, {"sheet.png": _PNG, "notes.txt": b"secret"})
++    # unknown run / missing file / non-image suffix
++    assert client.get("/runs/nope-xyz/artifacts/sheet.png").status_code == 404
++    assert client.get(f"/runs/{rid}/artifacts/absent.png").status_code == 404
++    assert client.get(f"/runs/{rid}/artifacts/notes.txt").status_code == 404
++
++
++def test_artifact_route_blocks_traversal(client):
++    rid = _run_with_artifacts(None, {"sheet.png": _PNG})
++    # run.log lives one level above artifacts/ — must not be reachable
++    (get_settings().runs_dir / rid / "run.log").write_text("secret", encoding="utf-8")
++    for path in ("../run.log", "..%2frun.log", "%2e%2e/run.log"):
++        r = client.get(f"/runs/{rid}/artifacts/{path}")
++        assert r.status_code in (404, 400), path
++        assert b"secret" not in r.content
++
++
++def test_gallery_rendered_on_run_page_and_fragment(client):
++    rid = _run_with_artifacts(
++        {
++            "sections": [
++                {
++                    "title": "갤러리 요약 시트",
++                    "items": [
++                        {"file": "sheet.png", "caption": "36종 렌더"},
++                        # invalid entries must be dropped, not rendered
++                        {"file": "../run.log", "caption": "traversal"},
++                        {"file": "absent.png", "caption": "missing"},
++                        {"file": "notes.txt", "caption": "not an image"},
++                    ],
++                }
++            ]
++        },
++        {"sheet.png": _PNG, "notes.txt": b"x"},
++    )
++    for url in (f"/runs/{rid}", f"/runs/{rid}/result-card"):
++        body = client.get(url).text
++        assert f"/runs/{rid}/artifacts/sheet.png" in body, url
++        assert "갤러리 요약 시트" in body, url
++        # invalid entries dropped: no artifact link other than sheet.png
++        assert "artifacts/.." not in body, url
++        assert "absent.png" not in body, url
++        assert "notes.txt" not in body, url
++
++
++def test_gallery_absent_without_index(client):
++    rid = _run_with_artifacts(None, {"sheet.png": _PNG})
++    body = client.get(f"/runs/{rid}").text
++    assert "artifact-gallery" not in body
++
++
++def test_index_caption_is_escaped(client):
++    rid = _run_with_artifacts(
++        {"sections": [{"title": "<script>alert(1)</script>",
++                       "items": [{"file": "sheet.png",
++                                  "caption": "<img src=x onerror=alert(1)>"}]}]},
++        {"sheet.png": _PNG},
++    )
++    body = client.get(f"/runs/{rid}").text
++    assert "<script>alert(1)</script>" not in body
++    assert "<img src=x" not in body
