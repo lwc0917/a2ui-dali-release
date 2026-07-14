@@ -1,0 +1,33 @@
+apiVersion: agenthub/v1
+id: a2ui-dali-release
+name: a2ui-dali Release
+version: 1.0.0
+description: dali-ui 에 새 릴리스 태그가 생기면 격리 DALi 스택을 재빌드하고, a2ui-dali 렌더러를 빌드(깨지면 Claude 가 코드 적응) 후 갤러리 코퍼스 36종을 이전 릴리스 렌더와 비교. 심각한 시각 훼손이 없으면 github.com/dalihub/a2ui-dali 로 자동 릴리스(버전 범프+태그+push). 결과 리포트(이미지 포함)는 run 페이지에서 확인. 새 태그가 없으면 no-op.
+owner: uifw
+capabilities: [release-check, build, verify, release]
+tags: [real, long-running]
+
+# 완전 자동 릴리스 (public repo push) — 품질은 3중 게이트가 fail-closed 로 보증:
+#  conformance 전수 통과 + 픽셀 회귀(mean-abs-diff) + Claude 시각 판정(기본값 DAMAGED=차단).
+confirm_before_run: false
+# 단일 워크스페이스 + 수십 분 스택 빌드 → 동시 실행 금지.
+single_flight: true
+
+runner:
+  type: subprocess
+  command: ["bash", "automation/run.sh"]
+  cwd: "."
+  # dali-core/adaptor/ui 3종 풀빌드 + 36종 렌더 + Claude 적응 루프 → 여유 있게 3시간.
+  timeout_seconds: 10800
+  logs:
+    mode: stdout
+    step_patterns:
+      - { event: step,  regex: "^\\[step\\]\\s+(?P<name>.+)$" }
+      - { event: error, regex: "^\\s*\\[ERROR\\]\\s*(?P<msg>.+)" }
+  result:
+    # stdout_tail(40줄 캡) 대신 파일 — 리포트 전문이 잘리지 않고, 실패 시에도 읽힘.
+    mode: file
+    path: workspace/last_report.md
+    content_type: "text/markdown"
+  success:
+    mode: exit_zero
