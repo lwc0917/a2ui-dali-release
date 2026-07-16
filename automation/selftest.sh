@@ -199,6 +199,50 @@ import json
 es = {e['name']: e for e in json.load(open('$PO/compare.json'))}
 assert es['noise']['status'] == 'PASS', es['noise']\""
 
+ui_step "[selftest] 6) 무인 운영 하드닝 (P1-9 로테이션 / P1-10 타임아웃·preflight / 다중 판정)"
+# 6a) P1-9: prune_old_runs 를 run.sh 에서 추출해 실제로 검증 (최신 KEEP_RUNS 개만 남기고
+#     runs/ 밖은 절대 안 건드림; KEEP_RUNS<1 은 현재 실행 보호 위해 스킵).
+eval "$(sed -n '/^prune_old_runs()/,/^}/p' "$ROOT/automation/run.sh")"
+PW="$TESTWS/prunetest"
+mkdir -p "$PW/runs" "$PW/keepme"
+for i in 1 2 3 4 5; do
+  mkdir -p "$PW/runs/r$i"
+  touch -d "2026-01-0$i 00:00" "$PW/runs/r$i" 2>/dev/null || true
+done
+( WORKSPACE="$PW" KEEP_RUNS=2; prune_old_runs )
+t "P1-9: 최신 2개만 보존" bash -c "[ \$(ls -1d '$PW/runs/'*/ 2>/dev/null | wc -l) -eq 2 ]"
+t "P1-9: 가장 오래된 r1 삭제됨" bash -c "! test -d '$PW/runs/r1'"
+t "P1-9: 가장 최신 r5 보존" test -d "$PW/runs/r5"
+t "P1-9: runs/ 밖(keepme) 절대 미삭제" test -d "$PW/keepme"
+mkdir -p "$PW/runs/rz"
+( WORKSPACE="$PW" KEEP_RUNS=0; prune_old_runs )
+t "P1-9: KEEP_RUNS<1 은 정리 스킵(현재 실행 보호)" test -d "$PW/runs/rz"
+
+# 6b) P1-10: render/conformance 가 하드 타임아웃으로 감싸졌는가 + preflight 도구 확인
+t "P1-10: render 샘플 타임아웃 래핑" grep -q 'timeout -k .* "\$RENDER_SAMPLE_TIMEOUT"' "$ROOT/automation/render.sh"
+t "P1-10: conformance 타임아웃 래핑" grep -q 'timeout -k .* "\$CONFORMANCE_TIMEOUT"' "$ROOT/automation/conformance.sh"
+t "P1-10: render preflight 필수 도구 점검" grep -q 'command -v "\$_t"' "$ROOT/automation/render.sh"
+
+# 6c) 다중 판정(JUDGE_VOTES): ACCEPTABLE 스텁 + 2표 → 만장일치 GREEN. (garbage→RED 는 §4 커버)
+STUB2="$TESTWS/bin_vote"
+mkdir -p "$STUB2"
+# claude_call 은 --output-format json 결과에서 result 를 뽑는다 → 스텁도 JSON 을 낸다.
+cat >"$STUB2/claude" <<'STUB'
+#!/bin/bash
+echo '{"result":"ACCEPTABLE\n미세 드리프트","is_error":false}'
+STUB
+chmod +x "$STUB2/claude"
+CDIR2="$TESTWS/cmp_vote"
+mkdir -p "$CDIR2/side"
+python3 -c '
+import json, sys
+json.dump([{"name": "01_x", "diff": 0.06, "status": "REVIEW", "reason": "diff=0.06",
+            "card": "side/01_x.side.png"}], open(sys.argv[1], "w"))
+' "$CDIR2/compare.json"
+: >"$CDIR2/side/01_x.side.png"
+GATE2=$(PATH="$STUB2:$PATH" JUDGE_VOTES=2 bash "$ROOT/automation/judge.sh" "$CDIR2" 2>/dev/null | tail -1)
+t "다중 판정: ACCEPTABLE 2표 만장일치 → GREEN" test "$GATE2" = "GREEN"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"

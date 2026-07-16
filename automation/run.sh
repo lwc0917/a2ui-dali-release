@@ -18,6 +18,22 @@ fail() { # $1=outcome $2=detail
   exit 1
 }
 
+# ── [rotate] 오래된 실행 디렉터리 정리 (P1-9: 무인 운영 시 runs/ 무한 증가 방지) ──
+# workspace/runs 하위에서 최신 KEEP_RUNS 개만 남기고 삭제. 방금 만든 현재 실행은 mtime 이
+# 가장 최신이라 항상 보존. 경로 가드(case)로 workspace/runs 밖은 절대 건드리지 않는다.
+prune_old_runs() {
+  local base="$WORKSPACE/runs" keep="${KEEP_RUNS:-20}" d
+  [ -d "$base" ] || return 0
+  [ "$keep" -ge 1 ] 2>/dev/null || return 0   # keep<1 은 현재 실행까지 지울 위험 → 스킵
+  ls -1dt "$base"/*/ 2>/dev/null | tail -n +"$((keep + 1))" | while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    case "$d" in
+    "$base"/*/) rm -rf "$d" ;;
+    esac
+  done
+}
+prune_old_runs
+
 ui_step "[run] a2ui-dali 자동 릴리스 워크플로 시작 (run=$RUN_ID)"
 ui_info "게이트 설정: level=$GATE_LEVEL · 픽셀 임계 $DIFF_THRESHOLD · DRY_RUN=$DRY_RUN · FORCE_ACCEPT=${FORCE_ACCEPT:-0}"
 printf 'GATE_LEVEL=%s\nDIFF_THRESHOLD=%s\n' "$GATE_LEVEL" "$DIFF_THRESHOLD" >"$RUNDIR/gate.env"

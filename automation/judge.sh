@@ -73,21 +73,35 @@ else
 아래 기준으로 새 빌드를 판정하세요 (게이트 강도: $GATE_LEVEL).
 $CRITERIA
 답변 형식: 첫 줄에 정확히 한 단어 DAMAGED 또는 ACCEPTABLE. 둘째 줄에 근거 한 문장(한국어)."
-    verdict="DAMAGED" # 보수 기본값
-    rationale="판정 실패(호출/파싱 불가) — 보수적으로 차단"
-    if out=$(claude_call "$CDIR" "Read Glob" "$prompt"); then
-      first=$(head -1 <<<"$out" | awk '{print $1}' | tr -cd 'A-Z')
-      if [ "$first" = "DAMAGED" ] || [ "$first" = "ACCEPTABLE" ]; then
-        verdict=$first
-        rationale=$(sed -n '2p' <<<"$out")
-        [ -n "$rationale" ] || rationale="(근거 없음)"
+    # 보수적 다수결(fail-closed 강화): JUDGE_VOTES 번 판정해 '하나라도 DAMAGED(또는 판정
+    # 불가)' 면 DAMAGED — 단일 오판(ACCEPTABLE 새는 것)을 줄인다. DAMAGED 가 나오면 즉시
+    # 중단(비용 절약). JUDGE_VOTES=1(기본)은 기존 단일 판정과 동일 동작·비용.
+    verdict="ACCEPTABLE"
+    rationale="(근거 없음)"
+    votes=0
+    for ((vi = 1; vi <= ${JUDGE_VOTES:-1}; vi++)); do
+      v="DAMAGED" # 보수 기본값(호출/파싱 실패 시)
+      r="판정 실패(호출/파싱 불가) — 보수적으로 차단"
+      if out=$(claude_call "$CDIR" "Read Glob" "$prompt"); then
+        first=$(head -1 <<<"$out" | awk '{print $1}' | tr -cd 'A-Z')
+        if [ "$first" = "DAMAGED" ] || [ "$first" = "ACCEPTABLE" ]; then
+          v=$first
+          r=$(sed -n '2p' <<<"$out")
+          [ -n "$r" ] || r="(근거 없음)"
+        fi
       fi
-    fi
+      votes=$((votes + 1))
+      rationale="$r"
+      if [ "$v" = "DAMAGED" ]; then
+        verdict="DAMAGED"
+        break # 하나라도 DAMAGED 면 확정 — 나머지 투표 불필요
+      fi
+    done
     if [ "$verdict" = "DAMAGED" ]; then
       red=1
-      ui_warn "$name → DAMAGED: $rationale"
+      ui_warn "$name → DAMAGED (${votes}/${JUDGE_VOTES:-1}표): $rationale"
     else
-      ui_ok "$name → ACCEPTABLE: $rationale"
+      ui_ok "$name → ACCEPTABLE (${votes}표 만장일치): $rationale"
     fi
     printf '%s\t%s\t%s\n' "$name" "$verdict" "$rationale" >>"$TSV"
   done

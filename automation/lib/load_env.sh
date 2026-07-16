@@ -41,6 +41,11 @@ fi
 : "${RENDER_H:=1280}"
 : "${RENDER_WAIT:=5}"
 : "${MAX_FIX_ATTEMPTS:=3}"
+# 무인 운영 하드 상한/정리 (P1-9/P1-10): 멈춘 프로세스가 실행을 무한 점유하거나
+# runs/ 가 디스크를 무한 증가시키지 않도록.
+: "${RENDER_SAMPLE_TIMEOUT:=90}"   # 샘플 1건 렌더 하드 상한(초) — 멈춘 Xvfb/렌더러 격리
+: "${CONFORMANCE_TIMEOUT:=900}"    # conformance 실행 하드 상한(초)
+: "${KEEP_RUNS:=20}"               # workspace/runs 보관 개수 — 오래된 실행 디렉터리 정리
 
 # 게이트 강도 — hub run 입력(env_from_inputs) 또는 env 로 지정.
 #  strict  : 사람 눈에 띄는 변화면 차단   (픽셀 탐지 기본 0.02)
@@ -69,6 +74,9 @@ fi
 # ── Claude 에스컬레이션 ─────────────────────────────────────────
 : "${CLAUDE_MODEL:=opus}"
 : "${CLAUDE_TIMEOUT:=900}"
+# REVIEW 샘플당 비전 판정 투표수(다수결이 아니라 '하나라도 DAMAGED 면 RED' — fail-closed
+# 강화). 1=기존 단일 판정(비용 동일). 2~3 이면 단일 오판(ACCEPTABLE 새는 것)을 줄인다.
+: "${JUDGE_VOTES:=1}"
 
 # ── 실행 모드 ───────────────────────────────────────────────────
 : "${DRY_RUN:=0}"
@@ -88,6 +96,7 @@ export WORKSPACE PREFIX SETENV SRC \
        A2UI_GIT_REMOTE GIT_RELEASE_NAME GIT_RELEASE_EMAIL \
        DALI_UI_REPO DALI_CORE_REPO DALI_ADAPTOR_REPO \
        RENDER_W RENDER_H RENDER_WAIT GATE_LEVEL DIFF_THRESHOLD MAX_FIX_ATTEMPTS \
+       RENDER_SAMPLE_TIMEOUT CONFORMANCE_TIMEOUT KEEP_RUNS JUDGE_VOTES \
        CLAUDE_MODEL CLAUDE_TIMEOUT DRY_RUN FORCE_TARGET FORCE_REBUILD JOBS
 
 mkdir -p "$WORKSPACE" "$SRC"
