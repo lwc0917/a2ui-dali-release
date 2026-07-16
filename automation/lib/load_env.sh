@@ -51,8 +51,12 @@ case "$GATE_LEVEL" in strict | normal | lenient) : ;; *) GATE_LEVEL=normal ;; es
 # hub 입력은 미지정 시 빈 문자열로 오므로 비어있지 않을 때만 반영
 [ -n "${DIFF_THRESHOLD_INPUT:-}" ] && DIFF_THRESHOLD="$DIFF_THRESHOLD_INPUT"
 case "${DRY_RUN_INPUT:-}" in true | 1) DRY_RUN=1 ;; esac
-: "${FORCE_ACCEPT:=0}"
-case "${FORCE_ACCEPT_INPUT:-}" in true | 1) FORCE_ACCEPT=1 ;; esac
+# FORCE_ACCEPT: 게이트 RED 를 수동 승인할 '정확한 dali-ui 태그'(예: v2.5.29.10863).
+# 값이 현재 타깃 태그와 일치할 때만 1회 오버라이드(target-bound). '1/true' 같은 포괄값은
+# 무력화 — 스케줄 inputs/.env 에 남겨둬도 다음(다른) 타깃엔 적용되지 않아 sticky 우회 불가.
+: "${FORCE_ACCEPT:=}"
+[ -n "${FORCE_ACCEPT_INPUT:-}" ] && FORCE_ACCEPT="$FORCE_ACCEPT_INPUT"
+case "$FORCE_ACCEPT" in 1 | true | yes | on | 0 | false | no | off) FORCE_ACCEPT="" ;; esac
 export FORCE_ACCEPT
 if [ -z "${DIFF_THRESHOLD:-}" ]; then
   case "$GATE_LEVEL" in
@@ -71,6 +75,14 @@ fi
 : "${FORCE_TARGET:=}"
 : "${FORCE_REBUILD:=0}"
 : "${JOBS:=$(nproc)}"
+
+# ── 네트워크 가드 (무인 운영: 어떤 git 호출도 hang 하지 않도록) ──
+export GIT_TERMINAL_PROMPT=0   # 자격증명 프롬프트로 무한 대기 금지(fresh 머신)
+: "${GIT_HTTP_LOW_SPEED_LIMIT:=1000}"  # 전송이 <1KB/s 로
+: "${GIT_HTTP_LOW_SPEED_TIME:=30}"     # 30초 지속되면 스톨로 간주해 중단
+: "${NET_TIMEOUT:=900}"                # net_retry / ls-remote 각 시도 wall-clock 상한(초)
+: "${GIT_SSH_COMMAND:=ssh -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new}"
+export GIT_HTTP_LOW_SPEED_LIMIT GIT_HTTP_LOW_SPEED_TIME NET_TIMEOUT GIT_SSH_COMMAND
 
 export WORKSPACE PREFIX SETENV SRC \
        A2UI_GIT_REMOTE GIT_RELEASE_NAME GIT_RELEASE_EMAIL \

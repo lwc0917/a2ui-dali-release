@@ -120,12 +120,35 @@ def gallery_sheet(entries, new_dir, base_dir, out_path, cols=6, tile_w=240):
     sheet.save(out_path)
 
 
+# ── 국소 훼손 백스톱 (P1-7) — 전역 mean-abs-diff 가 작은 국소 손상을 희석하는 문제 대비.
+# 실측 보정(36개 실제 렌더): AA 노이즈(±3)의 patch-max ≤ 2.52, 실제 렌더 최소 균일도 std=12.8.
+# → PATCH_THRESHOLD=8.0 (노이즈보다 훨씬 크고, 국소 전면손상 150+ 보다 훨씬 작음),
+#   UNIFORM std<4.0 (가장 성긴 실제 렌더 12.8 보다 낮아 오탐 없음).
+# 이 백스톱은 '판정 대상(REVIEW)'만 넓힐 뿐 — 최종 RED 는 시각 판정(judge)이 결정한다.
+def patch_max_diff(a, b, tile=32):
+    """타일별 mean-abs-diff 의 최댓값 — 전역 평균이 묻어버리는 국소 손상을 표면화(0..255)."""
+    d = np.abs(a - b).mean(axis=2)  # HxW
+    h, w = d.shape
+    hh, ww = (h // tile) * tile, (w // tile) * tile
+    if hh == 0 or ww == 0:
+        return float(d.mean())
+    dc = d[:hh, :ww].reshape(hh // tile, tile, ww // tile, tile)
+    return float(dc.mean(axis=(1, 3)).max())
+
+
+def is_near_uniform(a, std_thresh=4.0):
+    """이미지가 거의 균일(빈 화면)한가 — 채널 std 평균이 임계 미만."""
+    return float(a.reshape(-1, a.shape[-1]).std(axis=0).mean()) < std_thresh
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--baseline", required=True)
     ap.add_argument("--new", dest="new_dir", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--threshold", type=float, default=0.05)
+    ap.add_argument("--patch-threshold", type=float, default=8.0,
+                    help="국소 타일 mean-abs-diff 백스톱 (전역이 희석하는 국소 손상 탐지)")
     args = ap.parse_args()
 
     os.makedirs(os.path.join(args.out, "side"), exist_ok=True)
@@ -155,10 +178,17 @@ def main():
             a = np.asarray(base_img, dtype=float)
             b = np.asarray(new_img, dtype=float)
             diff = float(np.abs(a - b).mean())
-            if diff <= args.threshold:
-                status, reason = "PASS", ""
-            else:
+            pmax = patch_max_diff(a, b)
+            if diff > args.threshold:
                 status, reason = "REVIEW", f"diff={diff:.3f}"
+            elif pmax > args.patch_threshold:
+                # 전역은 임계 이하지만 특정 영역이 크게 다름 → 국소 손상 의심, 판정에 회부
+                status, reason = "REVIEW", f"국소 diff={pmax:.2f} (전역 {diff:.3f}≤{args.threshold})"
+            elif is_near_uniform(b) and not is_near_uniform(a):
+                # 새 렌더만 거의 균일 → 빈 화면/전면 미렌더 의심
+                status, reason = "REVIEW", "새 렌더가 거의 균일 — 빈 화면 의심"
+            else:
+                status, reason = "PASS", ""
         card = None
         if status != "PASS":
             card = os.path.join("side", name + ".side.png")

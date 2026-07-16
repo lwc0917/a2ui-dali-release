@@ -29,9 +29,9 @@ inputs:
     default: false
     description: "리허설 — 게이트까지 전부 수행하되 커밋/태그/push/baseline/ledger 는 변경하지 않음"
   - name: force_accept
-    type: bool
-    default: false
-    description: "게이트 RED 1회 수동 승인 — 이전 실패 리포트의 side-by-side 이미지를 사람이 확인한 뒤에만 사용"
+    type: string
+    required: false
+    description: "게이트 RED 1회 수동 승인 — 승인할 '정확한 dali-ui 태그'(예: v2.5.29.10863)를 입력. 리포트의 실패 타깃과 일치할 때만 1회 적용되고, 포괄값(true/1)이나 다른 태그는 무시(차단)된다. 이전 실패 리포트의 side-by-side 이미지를 사람이 확인한 뒤에만 사용."
 
 runner:
   type: subprocess

@@ -97,6 +97,12 @@ def main():
         names = ", ".join(e["name"] for e in damaged) or "?"
         tldr = (f"dali-ui **{ui_tag}** 빌드는 성공했으나 시각 게이트 RED — "
                 f"**{names}** 손상 판정으로 릴리스 보류. 사람 확인 필요.")
+        # Golden-candidate markers (hub golden review): the run page surfaces each damaged
+        # sample's baseline|new|diff card (<name>.side.png, staged into artifacts/ below) so a
+        # human can approve the candidate as the new golden — a force_accept re-run then releases
+        # and rotates the baseline. One marker per damaged sample; the hub greps these from the log.
+        for e in damaged:
+            print(f"[golden-candidate] {e['name']}")
     else:
         tldr = f"dali-ui **{ui_tag}** 처리 중 실패({args.outcome}) — {args.detail}"
 

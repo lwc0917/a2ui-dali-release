@@ -2,8 +2,9 @@
 # lib/load_env.sh, lib/ui.sh 이후 source.
 
 # 원격 태그 이름 목록 (peeled ^{} 제거, 정렬 전)
+# timeout 로 감싸 ls-remote 가 스톨해도 무한 대기하지 않음(무인 운영).
 _remote_tags() { # $1=repo url, $2=refs glob
-  git ls-remote --tags "$1" "$2" 2>/dev/null \
+  timeout "${NET_TIMEOUT:-900}" git ls-remote --tags "$1" "$2" 2>/dev/null \
     | awk '{print $2}' | sed 's|^refs/tags/||; s|\^{}$||' | sort -u
 }
 

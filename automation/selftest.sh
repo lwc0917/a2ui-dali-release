@@ -68,10 +68,14 @@ t "normal → 0.05" test "$(gate_map normal)" = "normal 0.05"
 t "lenient → 0.30" test "$(gate_map lenient)" = "lenient 0.30"
 t "직접 지정이 레벨 기본값보다 우선" test "$(gate_map lenient 0.10)" = "lenient 0.10"
 t "미지정/이상값 → normal 폴백" test "$(gate_map weird)" = "normal 0.05"
-t "force_accept 입력 매핑" bash -c "
+t "force_accept 포괄값(true)은 무력화 (sticky 우회 차단)" bash -c "
   export FORCE_ACCEPT_INPUT=true
   source '$ROOT/automation/lib/load_env.sh'
-  [ \"\$FORCE_ACCEPT\" = 1 ]"
+  [ -z \"\$FORCE_ACCEPT\" ]"
+t "force_accept 태그값은 통과 (target-bound)" bash -c "
+  export FORCE_ACCEPT_INPUT=v2.5.29.10863
+  source '$ROOT/automation/lib/load_env.sh'
+  [ \"\$FORCE_ACCEPT\" = v2.5.29.10863 ]"
 
 ui_step "[selftest] 2) ledger"
 t "ledger_add 후 ledger_has" bash -c "
@@ -118,6 +122,14 @@ json.dump([{"name": "01_x", "diff": 0.5, "status": "REVIEW", "reason": "diff=0.5
 GATE=$(PATH="$STUB:$PATH" bash "$ROOT/automation/judge.sh" "$CDIR" 2>/dev/null | tail -1)
 t "쓰레기 응답 → RED (DAMAGED 기본값)" test "$GATE" = "RED"
 t "verdicts.json 에 DAMAGED 기록" grep -q DAMAGED "$CDIR/verdicts.json"
+# P0-2: 손상/절단/빈 compare.json 은 판정 불가 → 보수적으로 RED (fail-closed)
+judge_gate() { PATH="$STUB:$PATH" bash "$ROOT/automation/judge.sh" "$1" 2>/dev/null | tail -1; }
+CDIR_BAD="$WORKSPACE/cmp_corrupt"; mkdir -p "$CDIR_BAD"
+printf '[{"name":"x","status":"REVIEW' >"$CDIR_BAD/compare.json"   # 절단된 JSON
+t "손상된 compare.json → RED (fail-closed)" test "$(judge_gate "$CDIR_BAD")" = "RED"
+CDIR_EMPTY="$WORKSPACE/cmp_empty"; mkdir -p "$CDIR_EMPTY"
+printf '[]' >"$CDIR_EMPTY/compare.json"                            # 빈 목록(비정상 비교)
+t "빈 목록 compare.json → RED (fail-closed)" test "$(judge_gate "$CDIR_EMPTY")" = "RED"
 t "claude_judgement 기본값 유지" bash -c "
   export PATH='$STUB:\$PATH' WORKSPACE='$WORKSPACE' CLAUDE_MODEL=opus CLAUDE_TIMEOUT=10
   source '$ROOT/automation/lib/ui.sh'; source '$ROOT/automation/lib/claude.sh'
@@ -142,6 +154,50 @@ assert es['s1']['status']=='PASS' and es['s2']['status']=='REVIEW'\""
 t "REVIEW side 카드 생성" test -s "$O/side/s2.side.png"
 t "PASS 는 side 카드 없음" bash -c "! test -e '$O/side/s1.side.png'"
 t "갤러리 시트 생성" test -s "$O/gallery_sheet.png"
+
+ui_step "[selftest] 5b) P1-7 국소훼손/빈화면 백스톱 & 오탐 가드"
+# 전역 mean-abs-diff 가 국소 손상을 희석하는 취약점(P1-7) 회귀 방지.
+# 세 케이스 모두 결정적(난수 없음) — 임계 여유를 넉넉히 두어 부동소수 흔들림에도 안전.
+PA="$WORKSPACE/pa" PB="$WORKSPACE/pb" PO="$WORKSPACE/po"
+mkdir -p "$PA" "$PB"
+python3 - "$PA" "$PB" <<'PY'
+import sys
+import numpy as np
+from PIL import Image
+A, B = sys.argv[1], sys.argv[2]
+# 공통 베이스: 세로 그라디언트(비균일 std≈74) — is_near_uniform 오작동 방지용.
+base = np.tile((np.arange(1024) % 256).astype(np.uint8)[:, None, None], (1, 1024, 3))
+
+# (1) 국소 훼손: 32x32 타일 하나만 +40 → 전역 0.038(≤0.05)인데 국소 patch≈39(>8).
+loc = base.copy()
+loc[448:480, 448:480] = np.clip(loc[448:480, 448:480].astype(int) + 40, 0, 255)
+Image.fromarray(base).save(A + "/loc.png")
+Image.fromarray(loc).save(B + "/loc.png")
+
+# (2) 빈 화면(전면 미렌더): 새 렌더가 균일 백색 → 전역 diff 큼 → REVIEW.
+Image.fromarray(base).save(A + "/blank.png")
+Image.fromarray(np.full((1024, 1024, 3), 255, np.uint8)).save(B + "/blank.png")
+
+# (3) 오탐 가드: 서브임계 희소 노이즈(+2, 73px 간격) → 전역·patch 모두 임계 이하 → PASS.
+noise = base.copy()
+noise[::73, ::73] = np.clip(noise[::73, ::73].astype(int) + 2, 0, 255)
+Image.fromarray(base).save(A + "/noise.png")
+Image.fromarray(noise).save(B + "/noise.png")
+PY
+python3 "$ROOT/tools/compare.py" --baseline "$PA" --new "$PB" --out "$PO" >/dev/null
+t "국소 훼손(전역<임계, patch>임계) → REVIEW(국소)" bash -c "python3 -c \"
+import json
+es = {e['name']: e for e in json.load(open('$PO/compare.json'))}
+assert es['loc']['status'] == 'REVIEW', es['loc']
+assert '국소' in es['loc']['reason'], es['loc']\""
+t "빈 화면(전면 미렌더) → REVIEW" bash -c "python3 -c \"
+import json
+es = {e['name']: e for e in json.load(open('$PO/compare.json'))}
+assert es['blank']['status'] == 'REVIEW', es['blank']\""
+t "서브임계 희소 노이즈 → PASS (백스톱 오탐 없음)" bash -c "python3 -c \"
+import json
+es = {e['name']: e for e in json.load(open('$PO/compare.json'))}
+assert es['noise']['status'] == 'PASS', es['noise']\""
 
 echo
 if [ "$FAILED" -eq 0 ]; then

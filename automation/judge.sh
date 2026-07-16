@@ -30,12 +30,31 @@ lenient)
 esac
 
 ui_step "[judge] REVIEW 샘플 시각 판정 (강도: $GATE_LEVEL)"
-mapfile -t REVIEWS < <(python3 -c '
+# compare.json 파싱을 프로세스치환 '밖'에서 수행해 python 의 비-0 exit 를 반드시 포착한다.
+# (실측 fail-open 버그: mapfile < <(python) 은 프로세스치환의 실패 exit 를 못 봐서
+#  손상/절단된 compare.json 을 'REVIEW 0건'→GREEN 으로 오인 → 판정 없이 릴리스.)
+# 파싱 실패 / 빈 목록 / 형식 위반 → 보수적으로 RED (설계 원칙: 판정 불가 = 차단).
+if ! REVIEW_TSV=$(python3 - "$COMPARE_JSON" <<'PY'
 import json, sys
-for e in json.load(open(sys.argv[1])):
+try:
+    data = json.load(open(sys.argv[1]))
+except (json.JSONDecodeError, OSError):
+    sys.exit(2)                       # 손상/절단/읽기불가
+if not isinstance(data, list) or not data:
+    sys.exit(3)                       # 빈 목록/비-list = 비정상 비교(정상 run 은 36건)
+for e in data:
+    if not isinstance(e, dict) or "status" not in e or "name" not in e:
+        sys.exit(4)                   # 형식 위반
     if e["status"] != "PASS":
-        print(e["name"] + "\t" + e["reason"])
-' "$COMPARE_JSON")
+        print(e["name"] + "\t" + e.get("reason", ""))
+PY
+); then
+  ui_err "compare.json 파싱/검증 실패 — 보수적으로 RED (판정 불가 = 차단)"
+  echo RED
+  exit 0
+fi
+REVIEWS=()
+[ -n "$REVIEW_TSV" ] && mapfile -t REVIEWS <<<"$REVIEW_TSV"
 
 TSV="$CDIR/.verdicts.tsv"
 : >"$TSV"

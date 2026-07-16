@@ -73,12 +73,18 @@ bash "$ROOT/automation/compare.sh" "$WORKSPACE/baseline" "$RUNDIR/new" "$RUNDIR/
 
 # ── [judge] ── (judge 의 진행 로그는 stderr 로 그대로, 마지막 줄만 판정)
 GATE=$(bash "$ROOT/automation/judge.sh" "$RUNDIR/compare" | tee /dev/stderr | tail -1)
+GATE_OVERRIDE=0
 if [ "$GATE" != "GREEN" ]; then
-  # FORCE_ACCEPT=1: RED 를 사람이 side-by-side 로 확인하고 의도된 변화로 승인했을 때의
-  # 1회성 수동 오버라이드 (예: 렌더러 개선 커밋으로 기준선이 정당하게 달라진 경우).
-  if [ "${FORCE_ACCEPT:-0}" = "1" ]; then
-    ui_warn "게이트 RED 를 FORCE_ACCEPT=1 로 수동 승인 — 릴리스 진행 (판정 기록은 리포트에 유지)"
+  # FORCE_ACCEPT 오버라이드: RED 를 사람이 side-by-side 이미지로 확인하고 의도된 변화로
+  # 승인했을 때만. 값이 '현재 dali-ui 타깃 태그와 정확히 일치'해야 1회 적용된다(target-bound)
+  # — 포괄값(1/true)은 load_env 에서 무력화되므로, 스케줄/.env 에 남겨둬도 다음(다른)
+  #   타깃엔 절대 적용되지 않아 sticky 우회가 불가능하다.
+  if [ -n "${FORCE_ACCEPT:-}" ] && [ "$FORCE_ACCEPT" = "$DALI_UI_TAG" ]; then
+    GATE_OVERRIDE=1
+    ui_warn "⚠️ 게이트 RED 를 FORCE_ACCEPT=$DALI_UI_TAG 로 수동 승인 — 릴리스 진행 (판정 기록 유지)"
   else
+    [ -n "${FORCE_ACCEPT:-}" ] \
+      && ui_warn "FORCE_ACCEPT='$FORCE_ACCEPT' 가 타깃 '$DALI_UI_TAG' 과 불일치 — 오버라이드 무시(차단)"
     fail gate-damage "시각 게이트 RED — 손상 판정 샘플 존재 (리포트 참조)"
   fi
 else
@@ -111,8 +117,14 @@ case "$REL_STATUS" in
 released)
   rotate_baseline "$NEW_VER"
   bash "$ROOT/automation/release_check.sh" --done "$DALI_UI_TAG"
-  bash "$ROOT/automation/report.sh" success "v$NEW_VER released"
-  ui_ok "[run] 완료 — v$NEW_VER 릴리스"
+  if [ "$GATE_OVERRIDE" = "1" ]; then
+    REL_NOTE="v$NEW_VER released — ⚠️ 게이트 RED 를 FORCE_ACCEPT 로 수동 승인(손상 판정을 무시하고 릴리스)"
+    bash "$ROOT/automation/report.sh" success "$REL_NOTE"
+    ui_warn "[run] 완료 — $REL_NOTE"
+  else
+    bash "$ROOT/automation/report.sh" success "v$NEW_VER released"
+    ui_ok "[run] 완료 — v$NEW_VER 릴리스"
+  fi
   ;;
 skipped)
   if [ "$DRY_RUN" = "1" ]; then

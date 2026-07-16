@@ -13,9 +13,18 @@ case "${1:?checkout|build}" in
 checkout)
   REF="${2:-main}"
   ui_step "[a2ui] 소스 준비: $REF ($A2UI_GIT_REMOTE)"
+  # 손상/부분 클론은 재클론으로 자가복구(무인 운영: 매 주기 영구 실패 방지)
+  if [ -d "$REPO/.git" ] && ! git -C "$REPO" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    ui_warn "a2ui-dali: 손상/부분 클론 감지 — 재클론"
+    rm -rf "$REPO"
+  fi
   if [ -d "$REPO/.git" ]; then
     git -C "$REPO" remote set-url origin "$A2UI_GIT_REMOTE" # .env 변경 반영
-    net_retry git -C "$REPO" fetch --tags --force origin || { ui_err "fetch 실패"; exit 1; }
+    if ! net_retry git -C "$REPO" fetch --tags --force origin; then
+      ui_warn "a2ui-dali: fetch 실패 — 재클론으로 자가복구"
+      rm -rf "$REPO"
+      net_retry git clone "$A2UI_GIT_REMOTE" "$REPO" || { ui_err "clone 실패"; exit 1; }
+    fi
   else
     net_retry git clone "$A2UI_GIT_REMOTE" "$REPO" || { ui_err "clone 실패"; exit 1; }
   fi

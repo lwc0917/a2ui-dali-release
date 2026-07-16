@@ -182,11 +182,15 @@ if [ "$CODE_CHANGED" = 1 ]; then
 fi
 git add CMakeLists.txt packaging/a2ui-dali.spec README.md CHANGELOG.md
 git commit -q -m "Release $NEW" || { ui_err "릴리스 커밋 실패"; exit 1; }
-git tag -a "v$NEW" -m "a2ui-dali $NEW — dali-ui $DALI_UI_TAG rebuild (automated release)"
+# 이전 실패로 남은 로컬 태그가 orphan 커밋을 가리킬 수 있음 → 새 커밋에 다시 달기 전 제거.
+git tag -d "v$NEW" >/dev/null 2>&1 || true
+git tag -a "v$NEW" -m "a2ui-dali $NEW — dali-ui $DALI_UI_TAG rebuild (automated release)" \
+  || { ui_err "태그 생성 실패: v$NEW"; exit 1; }
 ui_ok "릴리스 커밋+태그: v$NEW"
 
 ui_step "[release] push → $A2UI_GIT_REMOTE"
-if ! net_retry git push origin main || ! net_retry git push origin "v$NEW"; then
+# 원자적 push — main 과 태그가 함께 반영되거나 함께 실패(태그없는/부분 릴리스 방지).
+if ! net_retry git push --atomic origin main "v$NEW"; then
   ui_err "push 실패 — ledger 미기록, 다음 주기 재시도"
   write_release_json push-failed "$OLD" "$NEW" "$BUMP" "커밋/태그는 로컬 생성됨, push 실패"
   exit 1
