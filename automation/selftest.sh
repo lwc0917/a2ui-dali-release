@@ -243,6 +243,63 @@ json.dump([{"name": "01_x", "diff": 0.06, "status": "REVIEW", "reason": "diff=0.
 GATE2=$(PATH="$STUB2:$PATH" JUDGE_VOTES=2 bash "$ROOT/automation/judge.sh" "$CDIR2" 2>/dev/null | tail -1)
 t "다중 판정: ACCEPTABLE 2표 만장일치 → GREEN" test "$GATE2" = "GREEN"
 
+ui_step "[selftest] 7) README 호환표 갱신 (tools/readme_bump — 버전 범프 + 설명 셀 재작성)"
+# release.sh 가 릴리스 때 편집하는 README 호환 블록 로직을 결정적으로 회귀 검증(Claude 불필요).
+RB_OUT=$(python3 - "$ROOT/tools" "$TESTWS" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import readme_bump as rb
+
+SRC = (
+    "# demo\n\n"
+    "> ## ⚠️ DALi compatibility\n>\n"
+    "> | Module | Version |\n"
+    "> |--------|---------|\n"
+    "> | `dali2-core`, `dali2-adaptor` | **`dali_2.5.29`** |\n"
+    "> | `dali2-ui-foundation`, `dali2-ui-components` | "
+    "**`dali-ui` `v2.5.28.10837`** — old headers under `public-api/foo` |\n"
+    ">\n"
+    "> `dali-ui` trails core by one minor, so pair `dali-ui` 2.5.28 "
+    "with core/adaptor 2.5.29.\n\n"
+    "## Highlights\n\n- keep `v2.5.28.10837` here untouched\n"
+)
+ui, core = "v2.5.29.10863", "dali_2.5.30"
+HL = "## Highlights"
+
+b = rb.bump_versions(SRC, ui, core)
+head_b, tail_b = b[: b.find(HL)], b[b.find(HL):]
+tail_s = SRC[SRC.find(HL):]
+
+c = []
+c.append(("desc-current", rb.get_compat_desc(SRC) == "old headers under `public-api/foo`"))
+c.append(("bump-ui", "v2.5.29.10863" in head_b and "v2.5.28.10837" not in head_b))
+c.append(("bump-core", "dali_2.5.30" in head_b and "dali_2.5.29" not in head_b))
+c.append(("bump-pair", "pair `dali-ui` 2.5.29 with core/adaptor 2.5.30" in head_b))
+c.append(("bump-keeps-desc", "old headers under `public-api/foo`" in head_b))
+c.append(("bump-tail-untouched", tail_b == tail_s))  # Highlights 이후 옛 태그 언급 불변
+
+nd = "new headers under `public-api/widgets` + builder in `devel-api/builder`"
+d = rb.replace_compat_desc(b, ui, nd)
+head_d = d[: d.find(HL)]
+c.append(("desc-replaced", nd in head_d and "public-api/foo" not in head_d))
+c.append(("desc-keeps-tag", "v2.5.29.10863" in head_d))       # 태그 보존
+c.append(("desc-empty-noop", rb.replace_compat_desc(b, ui, "") == b))
+c.append(("desc-blank-noop", rb.replace_compat_desc(b, ui, "  \n ") == b))
+c.append(("desc-tail-untouched", d[d.find(HL):] == tail_s))
+
+# get-desc CLI 픽스처(다음 t 케이스에서 사용)
+open(sys.argv[2] + "/rm_cli.md", "w").write(
+    "> | x | **`dali-ui` `v9.9.9.9`** — hello world |\n")
+
+bad = [n for n, ok in c if not ok]
+print("FAIL:" + ",".join(bad) if bad else "OK")
+PY
+)
+t "readme_bump 회귀 (버전 범프+설명 셀+폴백)" test "$RB_OUT" = "OK"
+[ "$RB_OUT" = OK ] || ui_err "  readme_bump 실패 항목: $RB_OUT"
+t "get-desc CLI 동작" bash -c \
+  "[ \"\$(python3 '$ROOT/tools/readme_bump.py' get-desc '$TESTWS/rm_cli.md')\" = 'hello world' ]"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"

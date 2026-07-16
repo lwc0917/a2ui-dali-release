@@ -111,6 +111,23 @@ $BODY
   (pixel-regression gate + visual judge). Conformance: $CONF.
 EOF
 
+# README 호환표 '설명 셀' 재작성 초안 — 코드 적응(minor) 시에만.
+# 옛 dali-ui API 구조 서술이 새 태그와 어긋나지 않도록 Claude(Read 전용)로 갱신.
+# 호출 실패/빈 응답 → 빈 초안 → 원문 설명 유지(보수적 폴백, replace_compat_desc 가 처리).
+COMPAT_DRAFT="$RUNDIR/readme_compat_draft.txt"
+: >"$COMPAT_DRAFT"
+if [ "$CODE_CHANGED" = 1 ]; then
+  OLD_DESC=$(python3 "$ROOT/tools/readme_bump.py" get-desc "$REPO/README.md" 2>/dev/null || true)
+  CPROMPT="a2ui-dali README 의 'DALi compatibility' 표에는 이 릴리스가 빌드된 dali-ui API 표면을 한 구절로 설명하는 셀이 있습니다. 코드가 새 dali-ui \`$DALI_UI_TAG\` 에 맞춰 적응되었습니다. src/ 의 실제 #include 헤더 경로와 참조 네임스페이스만 근거로 그 설명 셀을 갱신한 '한 줄' 영어 구절을 출력하세요. 규칙: (1) 기존 스타일 유지 — 경로/네임스페이스는 백틱, 표 셀 1줄, (2) 과장·추측 금지 — src/ 에 실제로 있는 것만, 확신 없으면 기존 설명을 보수적으로 유지, (3) 표 파이프(|)·줄바꿈·머리말 없이 구절 텍스트만.
+
+현재 설명(참고): $OLD_DESC"
+  DESC=$(claude_call "$REPO" "Read Grep Glob" "$CPROMPT") || DESC=""
+  # 한 줄 정규화 + 파이프 제거(표 셀 파손 방지). 내용이 남으면만 초안 기록.
+  DESC=$(printf '%s' "$DESC" | tr '\n|' '  ' | sed 's/  */ /g; s/^ *//; s/ *$//')
+  [ -n "$DESC" ] && printf '%s' "$DESC" >"$COMPAT_DRAFT"
+  if [ -s "$COMPAT_DRAFT" ]; then ui_info "README 설명 셀 갱신 초안 준비됨"; else ui_info "README 설명 갱신 없음 — 원문 유지"; fi
+fi
+
 if [ "$DRY_RUN" = "1" ]; then
   write_release_json dry-run "$OLD" "$NEW" "$BUMP" "DRY_RUN=1 — 파일 미수정, 커밋/태그/push 생략"
   ui_ok "[DRY_RUN] v$NEW 릴리스 예정이었음 (초안: $DRAFT)"
@@ -118,9 +135,11 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 # ── 4파일 범프 ──────────────────────────────────────────────────
-python3 - "$REPO" "$OLD" "$NEW" "$DALI_UI_TAG" "$CORE_ADAPTOR_TAG" "$DRAFT" <<'PY'
-import re, sys
-repo, old, new, ui_tag, core_tag, draft = sys.argv[1:7]
+python3 - "$REPO" "$OLD" "$NEW" "$DALI_UI_TAG" "$CORE_ADAPTOR_TAG" "$DRAFT" "$ROOT/tools" "$COMPAT_DRAFT" <<'PY'
+import os, re, sys
+repo, old, new, ui_tag, core_tag, draft, tools_dir, compat_draft = sys.argv[1:9]
+sys.path.insert(0, tools_dir)
+import readme_bump
 
 def sub_file(path, fn):
     with open(path) as f:
@@ -137,31 +156,16 @@ sub_file(f"{repo}/CMakeLists.txt",
 sub_file(f"{repo}/packaging/a2ui-dali.spec",
          lambda t: re.sub(r"(?m)^Version:\s*\S+", f"Version:    {new}", t, count=1))
 
-# README 호환표: '## Highlights' 이전 블록에서 옛 core 태그(dali_X.Y.Z)와
-# 옛 dali-ui 태그(vX.Y.Z.B), 그 minor 문자열 쌍을 새 값으로 치환.
-# ※ 2단계 토큰 치환 — 새로 넣은 값(예: v2.5.29.…)이 다른 old 문자열(core minor
-#   2.5.29)과 겹쳐 연쇄 치환되는 사고를 막는다 (실측 버그).
-def fix_readme(t):
-    cut = t.find("## Highlights")
-    head, tail = (t[:cut], t[cut:]) if cut > 0 else (t, "")
-    old_core = re.search(r"dali_\d+\.\d+\.\d+", head)
-    old_ui = re.search(r"v\d+\.\d+\.\d+\.\d+", head)
-    pairs = []
-    if old_ui:
-        out = old_ui.group(0)
-        pairs.append((out, ui_tag))
-        pairs.append((".".join(out[1:].split(".")[:3]), ".".join(ui_tag[1:].split(".")[:3])))
-    if old_core:
-        oct_ = old_core.group(0)
-        pairs.append((oct_, core_tag))
-        pairs.append((oct_[len("dali_"):], core_tag[len("dali_"):]))
-    pairs.sort(key=lambda p: -len(p[0]))  # 긴 문자열(태그) 먼저 — minor 는 태그의 부분문자열
-    for i, (old_s, _) in enumerate(pairs):
-        head = head.replace(old_s, f"\x00SUB{i}\x00")
-    for i, (_, new_s) in enumerate(pairs):
-        head = head.replace(f"\x00SUB{i}\x00", new_s)
-    return head + tail
-sub_file(f"{repo}/README.md", fix_readme)
+# README 호환표: 버전 범프(항상) + 코드 적응 시 설명 셀 재작성(초안 있을 때만).
+# 순수 변환은 tools/readme_bump.py 로 이관 — selftest 가 동일 함수로 회귀 검증한다.
+# (버전 '숫자'뿐 아니라, 코드가 바뀐 릴리스에선 dali-ui API 구조 '설명'도 새 태그에 맞춰 갱신.)
+readme_desc = ""
+if os.path.exists(compat_draft):
+    readme_desc = open(compat_draft).read().strip()
+def edit_readme(t):
+    t = readme_bump.bump_versions(t, ui_tag, core_tag)
+    return readme_bump.replace_compat_desc(t, ui_tag, readme_desc)
+sub_file(f"{repo}/README.md", edit_readme)
 
 # CHANGELOG: 첫 '## [' 섹션 앞에 초안 삽입
 entry = open(draft).read().rstrip() + "\n\n"

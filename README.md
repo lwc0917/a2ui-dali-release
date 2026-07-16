@@ -23,6 +23,7 @@ Humans review the image report in the agent hub.
           (DAMAGED = 레이아웃 붕괴/겹침/미렌더/잘림; 판정 불가 → DAMAGED 보수 기본값)
 [release] GREEN: 코드 변경 있으면 minor, 리빌드만이면 patch 범프 —
           CHANGELOG/CMakeLists/README 호환표/spec 갱신 → 커밋+태그 → push
+          (코드 적응 릴리스면 README 호환표의 dali-ui API 설명 셀도 Claude 로 재작성)
 [rotate]  새 렌더가 다음 비교의 baseline 이 됨 · ledger 기록
 [report]  모든 경로(성공/실패)에서 리포트 + 이미지 산출
 ```
