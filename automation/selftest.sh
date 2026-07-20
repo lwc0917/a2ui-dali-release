@@ -300,6 +300,58 @@ t "readme_bump 회귀 (버전 범프+설명 셀+폴백)" test "$RB_OUT" = "OK"
 t "get-desc CLI 동작" bash -c \
   "[ \"\$(python3 '$ROOT/tools/readme_bump.py' get-desc '$TESTWS/rm_cli.md')\" = 'hello world' ]"
 
+ui_step "[selftest] 8) 렌더 에셋 해석 (capture.sh 가 렌더러 레포 루트에서 실행되는가)"
+# 렌더러는 이미지/아이콘/알파마스크를 상대경로 res/ 로 연다 → 실행 CWD 가 렌더러 레포 루트가
+# 아니면 에셋이 전부 조용히 유실되고(회색 플레이스홀더) 렌더는 "성공"으로 끝난다. 게이트는
+# prev vs new 델타라 양쪽이 똑같이 깨지면 diff=0(PASS) — 그래서 여기서 직접 못박는다.
+# 실제 실행 검증: xvfb-run/xwd/ffmpeg 를 스텁하고 가짜 렌더러가 자기 CWD 와 에셋 열림 여부를 기록.
+RSTUB="$TESTWS/bin_render"
+FAKE="$TESTWS/fakestack"
+mkdir -p "$RSTUB" "$FAKE/bin" "$FAKE/res/sample-images"
+echo "jpegbytes" >"$FAKE/res/sample-images/x.jpg"
+cat >"$FAKE/bin/a2ui-basic-renderer" <<'STUB'
+#!/bin/bash
+# 렌더러 대역: 실행 시점의 CWD 와, 상대경로 에셋이 열리는지를 기록한다.
+{ echo "PWD=$PWD"; if [ -f "res/sample-images/x.jpg" ]; then echo "ASSET=ok"; else echo "ASSET=missing"; fi; } \
+  >"$RENDER_PROBE"
+sleep 30 &   # capture.sh 가 kill 할 백그라운드 앱 흉내
+wait
+STUB
+chmod +x "$FAKE/bin/a2ui-basic-renderer"
+cat >"$RSTUB/xvfb-run" <<'STUB'
+#!/bin/bash
+while [ $# -gt 0 ]; do case "$1" in -a) shift;; -s) shift 2;; *) break;; esac; done
+export DISPLAY=":0"
+exec "$@"
+STUB
+cat >"$RSTUB/xwd" <<'STUB'
+#!/bin/bash
+out=""; while [ $# -gt 0 ]; do [ "$1" = "-out" ] && { out="$2"; shift 2; continue; }; shift; done
+[ -n "$out" ] && printf 'xwddata' >"$out"
+STUB
+cat >"$RSTUB/ffmpeg" <<'STUB'
+#!/bin/bash
+for a in "$@"; do last="$a"; done
+printf 'pngdata' >"$last"
+STUB
+chmod +x "$RSTUB/xvfb-run" "$RSTUB/xwd" "$RSTUB/ffmpeg"
+RPROBE="$TESTWS/render_probe.txt"
+: >"$RPROBE"
+CAP_IN="$TESTWS/cap_in.jsonl"
+echo '{"x":1}' >"$CAP_IN"
+# 호출자 CWD 는 res/ 가 없는 곳(=허브가 넘기는 에이전트 루트와 같은 상황).
+( cd "$TESTWS" && PATH="$RSTUB:$PATH" A2UI_RENDERER="$FAKE/bin/a2ui-basic-renderer" \
+    RENDER_PROBE="$RPROBE" bash "$ROOT/tools/capture.sh" "$CAP_IN" "$TESTWS/cap_out.png" 64 64 0 \
+) >/dev/null 2>&1
+t "렌더러가 에셋 루트(렌더러 레포)에서 실행됨" bash -c "grep -qx 'PWD=$FAKE' '$RPROBE'"
+t "상대경로 res/ 에셋이 실제로 열림" bash -c "grep -qx 'ASSET=ok' '$RPROBE'"
+t "렌더러 stderr 로그가 샘플별로 분리됨" grep -q 'RENDER_LOG=' "$ROOT/tools/capture.sh"
+# preflight: 코퍼스가 참조하는 로컬 에셋이 없으면 렌더는 시작조차 하면 안 된다.
+t "render preflight: 에셋 루트 부재 → 하드 실패" bash -c \
+  "grep -q '렌더 에셋 루트 없음' '$ROOT/automation/render.sh'"
+t "render preflight: 코퍼스 참조 에셋 존재 검증" bash -c \
+  "grep -q 'sample-images/' '$ROOT/automation/render.sh'"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"

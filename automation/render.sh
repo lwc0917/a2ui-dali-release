@@ -22,6 +22,19 @@ for _t in xvfb-run ffmpeg xwd; do command -v "$_t" >/dev/null 2>&1 || _missing+=
 if command -v fc-list >/dev/null 2>&1 && ! fc-list 2>/dev/null | grep -q .; then
   ui_warn "설치된 폰트를 찾지 못함 — 텍스트가 비어 보일 수 있음 (fonts-dejavu 권장)"
 fi
+# 에셋 부재는 하드 실패 — 에셋이 없어도 렌더는 "성공"으로 끝나고 이미지·아이콘·알파마스크만
+# 조용히 회색 플레이스홀더가 된다. 게이트는 prev vs new 델타라 '양쪽 다 똑같이 빠진' 손상을
+# 구조적으로 못 잡으므로(둘 다 플레이스홀더 → diff 0 → PASS), 렌더 전에 절대검증한다.
+RENDER_RES_DIR="$(cd "$(dirname "$A2UI_RENDERER")/.." && pwd)/res"
+[ -d "$RENDER_RES_DIR" ] || { ui_err "렌더 에셋 루트 없음: $RENDER_RES_DIR — 이미지가 전부 빈 채로 렌더된다"; exit 1; }
+_missing_assets=$(grep -ohE '[A-Za-z0-9_./-]*sample-images/[A-Za-z0-9_.-]+\.(jpg|jpeg|png|webp)' \
+  "$ROOT"/corpus/jsonl/*.jsonl 2>/dev/null | sed 's#^.*sample-images/#sample-images/#' | sort -u |
+  while read -r _rel; do [ -f "$RENDER_RES_DIR/$_rel" ] || echo "$_rel"; done)
+if [ -n "$_missing_assets" ]; then
+  ui_err "코퍼스가 참조하는 로컬 에셋 누락 (기준: $RENDER_RES_DIR):"
+  echo "$_missing_assets" | while read -r _m; do ui_err "  - $_m"; done
+  exit 1
+fi
 
 total=0 fail=0
 for f in "$ROOT"/corpus/jsonl/*.jsonl; do

@@ -128,7 +128,15 @@ def main():
         lines.append("")
 
     # ── 게이트 ──
-    if compare:
+    # bootstrap 은 비교 대상(이전 릴리스 렌더)이 아직 없어서 게이트를 돌 수 없다. 리포트용
+    # 갤러리 시트를 만들려고 baseline 을 자기 자신과 비교하므로 compare.json 은 존재하고
+    # 전부 diff=0(PASS)로 채워진다 — 그걸 그대로 "게이트 PASS 36" 으로 찍으면 검증을 통과한
+    # 것처럼 읽힌다(실제로는 아무것도 검증하지 않았다). 그래서 명시적으로 구분해 적는다.
+    if args.outcome == "bootstrap":
+        lines += ["### 게이트", "",
+                  f"- **미수행** — 최초 기준선이라 비교 대상(이전 릴리스 렌더)이 없음. "
+                  f"렌더 {len(compare)}종은 아래 갤러리에서 육안 확인.", ""]
+    elif compare:
         lines += ["### 게이트 (baseline 대비 픽셀 회귀 + 시각 판정)", "",
                   f"- PASS {n_pass} · REVIEW {len(reviews)} "
                   f"(허용 {len(accepted)} / 손상 {len(damaged)})", ""]
