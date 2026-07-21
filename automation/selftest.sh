@@ -550,6 +550,53 @@ t "정규화: 상한 초과 초안은 폐기(원문 유지)" bash -c \
   "[ -z \"\$(python3 -c 'print(\"x\"*300)' | { $(declare -f norm_desc); norm_desc; })\" ]"
 t "release.sh: 상한 가드 존재" grep -q 'COMPAT_DESC_MAX' "$ROOT/automation/release.sh"
 
+ui_step "[selftest] 11) 업스트림 델타 증거 (구→신 dali-ui 변화)"
+# 설치된 새 헤더는 '지금 뭐가 있나' 만 알려준다. 적응에 필요한 건 '무엇이 무엇으로 바뀌었나' 다.
+# 실측(dali-preview, 2026-07-21): 델타 없이 헤더만 준 경우 모델이 대체 API 를 못 찾아 기능을
+# 삭제했고, 델타/헤더를 주자 1회에 정확한 마이그레이션을 냈다.
+source "$ROOT/automation/lib/dali_headers.sh"
+DH="$TESTWS/dh"; mkdir -p "$DH/old/public-api" "$DH/new/public-api"
+cat > "$DH/old/public-api/label.h" <<'H'
+class Label {
+  void SetMarkupEnabled(bool enabled);
+  void SetText(const String& text);
+};
+H
+cat > "$DH/new/public-api/label.h" <<'H'
+class Label {
+  void SetText(const String& text);
+  void SetStyledText(const StyledText& styled);
+};
+class StyledText { static StyledText FromMarkup(const String& markup); };
+H
+# 캐시 히트 경로로 네트워크 없이 델타 생성(두 디렉터리가 이미 헤더를 갖고 있음)
+mkdir -p "$DH/delta"
+( cd "$DH" && OLD_DIR="$DH/old" NEW_DIR="$DH/new" DEST="$DH/delta" python3 -c '
+import os, re, pathlib
+DECL = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\s*\(")
+def syms(root):
+    out = set()
+    for p in pathlib.Path(root).rglob("*.h"):
+        for line in p.read_text().splitlines():
+            out.update(DECL.findall(line.split("//")[0]))
+    return out
+o, n, d = syms(os.environ["OLD_DIR"]), syms(os.environ["NEW_DIR"]), os.environ["DEST"]
+open(d + "/removed-symbols.txt", "w").write("\n".join(sorted(o - n)))
+open(d + "/added-symbols.txt", "w").write("\n".join(sorted(n - o)))
+' )
+t "델타: 사라진 심볼 추출" grep -qx "SetMarkupEnabled" "$DH/delta/removed-symbols.txt"
+t "델타: 대체 후보 추출" grep -qx "FromMarkup" "$DH/delta/added-symbols.txt"
+t "델타: 유지된 심볼은 미포함" bash -c "! grep -qx 'SetText' '$DH/delta/removed-symbols.txt'"
+t "fix.sh 가 델타를 조달" grep -q 'prepare_upstream_delta' "$ROOT/automation/fix.sh"
+t "fix.sh 프롬프트가 델타 경로를 명시" grep -q 'removed-symbols.txt' "$ROOT/automation/fix.sh"
+t "델타 기준점은 baseline meta 의 이전 태그" grep -q 'baseline/meta.json' "$ROOT/automation/fix.sh"
+t "프롬프트가 '지워서 통과' 를 금지" grep -q '기능을 지워서' "$ROOT/automation/fix.sh"
+if type dali_ui_headers_delta >/dev/null 2>&1 && type dali_ui_headers_fetch >/dev/null 2>&1; then
+  ui_ok "조달기 함수 로딩(공용 패턴: fetch + delta)"
+else
+  ui_err "FAIL: 조달기 함수 로딩"; FAILED=1
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"

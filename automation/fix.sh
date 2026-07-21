@@ -13,6 +13,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/automation/lib/load_env.sh"
 source "$ROOT/automation/lib/ui.sh"
 source "$ROOT/automation/lib/claude.sh"
+# shellcheck disable=SC1091
+source "$ROOT/automation/lib/dali_headers.sh"
 
 FIX_ALLOWED_RE='^src/'
 
@@ -89,6 +91,28 @@ retry_check() {
   esac
 }
 
+# ── 업스트림 델타 조달 (하네스가 증거를 만들어 준다) ──────────────────────────
+# 설치된 새 헤더($PREFIX/include)는 "지금 뭐가 있나" 만 알려준다. 정작 필요한 건 "직전
+# 릴리스에서 뭐가 어떻게 바뀌었나" 다 — 사라진 심볼과 그 자리를 대신하는 새 심볼.
+# 기준점은 baseline/meta.json 의 dali_ui(= 지금 기준선을 만든 태그)로 공짜로 얻는다.
+# 실측(dali-preview): 이 델타가 없으면 모델은 '사라졌다'까지만 알고 대체 API 를 못 찾아
+# 기능을 삭제하는 쪽으로 간다.
+DELTA_HINT=""
+prepare_upstream_delta() {
+  local prev new_tag dest
+  new_tag="${DALI_UI_TAG:-}"
+  [ -n "$new_tag" ] || return 1
+  prev="$(python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1])).get("dali_ui",""))
+except Exception: print("")' "$WORKSPACE/baseline/meta.json" 2>/dev/null)"
+  [ -n "$prev" ] && [ "$prev" != "$new_tag" ] || return 1
+  dest="$WORKSPACE/.dali-headers/delta-${prev}..${new_tag}"
+  dali_ui_headers_delta "$prev" "$new_tag" "$dest" >/dev/null 2>&1 || return 1
+  DELTA_HINT="$dest"
+  ui_info "[fix] 업스트림 델타 확보: $prev → $new_tag (사라진 심볼 $(grep -c . "$dest/removed-symbols.txt" 2>/dev/null || echo 0)개 / 새 심볼 $(grep -c . "$dest/added-symbols.txt" 2>/dev/null || echo 0)개)"
+}
+prepare_upstream_delta || ui_info "[fix] 업스트림 델타 없음(기준선 태그 미상/네트워크) — 설치 헤더만 제공"
+
 # visual 모드 프롬프트에 실을 증거: 어떤 샘플이 어떻게 깨졌는지 + 사람이 보는 것과 같은
 # side-by-side 카드의 절대경로(Claude 가 Read 로 이미지를 직접 본다) + 그 샘플의 코퍼스 입력.
 visual_evidence() {
@@ -118,7 +142,14 @@ $(visual_evidence)
 규칙 (위반 시 수정이 자동 폐기됩니다):
 - src/ 밖은 절대 수정 금지 — test/, examples/, CMakeLists.txt, packaging/, README, tools 등.
 - 렌더링 동작·공개 API 의미를 바꾸지 말 것. 테스트/기대값을 고치는 게 아니라 코드를 표준 방식으로 적응.
-- 존재가 불확실한 dali-ui 심볼을 지어내지 말 것. 설치된 실제 헤더를 Read 로 확인 가능: $PREFIX/include/dali-ui-foundation/, $PREFIX/include/dali-ui-components/
+- 존재가 불확실한 dali-ui 심볼을 지어내지 말 것. 설치된 실제 헤더를 Read/Grep 으로 확인 가능: $PREFIX/include/dali-ui-foundation/, $PREFIX/include/dali-ui-components/
+- 업스트림이 '무엇으로 바뀌었는지' 는 여기에 있다(없으면 '(없음)'): ${DELTA_HINT:-(없음)}
+    removed-symbols.txt = 직전 릴리스에 있었는데 사라진 이름(= 적응 대상)
+    added-symbols.txt   = 이번에 새로 생긴 이름(= 대체 후보가 거의 항상 여기 있다)
+    headers.diff        = 공개 헤더 전체 diff (새 형태를 문맥과 함께 확인)
+  API 가 '없어진' 것처럼 보이면 대개 '옮겨지거나 형태가 바뀐' 것이다. removed 에서 에러 심볼을
+  찾고 added 에서 짝을 찾은 뒤 헤더에서 시그니처를 확인하고 나서 코드를 쓸 것. 기능을 지워서
+  컴파일을 통과시키는 것은 적응이 아니며, 렌더가 달라지면 게이트에서 거부된다.
 - 참고(과거 2.5.28 재편 패턴): 빌더 헤더 devel-api/builder → integration-api/builder (타입 Dali::Ui::TreeNode → Dali::Ui::Integration::TreeNode), 뷰/텍스트 헤더가 public-api/{views,types,configuration}/ 카테고리 디렉토리로 이동, fluent 체이닝 setter 가 void 반환으로 변경, Label::SetUnderline → SetTextUnderline.
 
 - 게이트를 우회하는 어떤 시도도 금지 — 코퍼스/기준선/비교 임계값은 애초에 수정 범위 밖이고,
