@@ -42,6 +42,12 @@ printf 'GATE_LEVEL=%s\nDIFF_THRESHOLD=%s\n' "$GATE_LEVEL" "$DIFF_THRESHOLD" >"$R
 exec 9>"$WORKSPACE/.run.lock"
 flock -n 9 || { ui_err "다른 실행이 진행 중 — 종료"; exit 1; }
 
+# ── 환경 사전점검: 없으면 무엇이 안 되는지 먼저 알려준다(빌드 한참 뒤에 깨지는 대신). ──
+# PREFLIGHT_SKIP=1 로 우회 가능(오프라인 리허설/셀프테스트용).
+if [ "${PREFLIGHT_SKIP:-0}" != "1" ]; then
+  bash "$ROOT/automation/preflight.sh" || { ui_err "[run] 환경 미충족 — 중단"; exit 1; }
+fi
+
 # ── [detect] ──
 bash "$ROOT/automation/release_check.sh"
 rc=$?
