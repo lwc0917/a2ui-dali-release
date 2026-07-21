@@ -76,8 +76,11 @@ bash "$ROOT/automation/build_stack.sh" "$CORE_ADAPTOR_TAG" "$DALI_UI_TAG" \
 # ── [a2ui build] (+Claude 적응 루프) ──
 bash "$ROOT/automation/build_a2ui.sh" checkout main || fail infra "a2ui-dali 소스 준비 실패"
 if ! bash "$ROOT/automation/build_a2ui.sh" build; then
-  bash "$ROOT/automation/fix.sh" build \
-    || fail build-break "새 dali-ui API 적응 실패 (fix 예산 소진)"
+  bash "$ROOT/automation/fix.sh" build; frc=$?
+  # 3 = LLM 을 아예 쓸 수 없었던 경우(사용량 한도 등). '고치지 못했다' 와 구분해 보고해야
+  # 사람이 '재시도하면 될 일' 임을 안다.
+  [ "$frc" -eq 3 ] && fail llm-unavailable "LLM 호출 불가로 코드 적응을 시도하지 못함 — 잠시 후 재실행"
+  [ "$frc" -ne 0 ] && fail build-break "새 dali-ui API 적응 실패 (fix 예산 소진)"
 fi
 
 # ── [conformance] ──
@@ -119,7 +122,9 @@ if [ "$GATE" != "GREEN" ]; then
     TRIAGE=$(bash "$ROOT/automation/triage.sh" "$RUNDIR/compare" | tee /dev/stderr | tail -1)
     if [ "$TRIAGE" = "CODE" ]; then
       ui_step "[fix] 시각 회귀가 코드 문제로 분류됨 — AI 수정 루프 진입"
-      if bash "$ROOT/automation/fix.sh" visual; then
+      bash "$ROOT/automation/fix.sh" visual; vrc=$?
+      [ "$vrc" -eq 3 ] && fail llm-unavailable "LLM 호출 불가로 시각 회귀 수정을 시도하지 못함 — 잠시 후 재실행"
+      if [ "$vrc" -eq 0 ]; then
         # fix.sh visual 은 게이트가 실제로 GREEN 이 된 경우에만 0 을 반환한다
         # (재빌드 → 전수 재렌더 → 재비교 → 재판정까지 통과). 그 렌더가 릴리스에 실린다.
         GATE=GREEN

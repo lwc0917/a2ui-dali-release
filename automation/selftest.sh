@@ -597,6 +597,29 @@ else
   ui_err "FAIL: 조달기 함수 로딩"; FAILED=1
 fi
 
+ui_step "[selftest] 12) LLM 을 '아예 못 쓴' 경우와 '고치지 못한' 경우의 구분"
+# 실측(2026-07-21): 시각 수정 2회가 모두 429(session limit)로 실패했는데, 하네스가 사유를
+# 버리고 "AI 가 시도했으나 해결 못 함" 으로 보고했다. 사람은 AI 가 무능하다고 오해했고,
+# 실제로는 잠시 뒤 재실행하면 될 일이었다. 게다가 예산을 깎고 재빌드·재렌더까지 돌려 20분을 헛돌았다.
+source "$ROOT/automation/lib/claude.sh"
+LIMIT_JSON='{"is_error":true,"api_error_status":429,"result":"You'"'"'ve hit your session limit · resets 9:20pm"}'
+OVER_JSON='{"is_error":true,"api_error_status":503,"result":"Overloaded"}'
+REFUSE_JSON='{"is_error":true,"api_error_status":null,"result":"I cannot do that"}'
+GOOD_JSON='{"is_error":false,"result":"done"}'
+t "429 사용량 한도 → 일시적(2)" test "$(claude_failure_kind "$LIMIT_JSON" 0)" = "2"
+t "503 과부하 → 일시적(2)" test "$(claude_failure_kind "$OVER_JSON" 0)" = "2"
+t "timeout(rc=124) → 일시적(2)" test "$(claude_failure_kind "" 124)" = "2"
+t "모델이 응답했으나 못 씀 → 비일시적(1)" test "$(claude_failure_kind "$REFUSE_JSON" 0)" = "1"
+t "파싱 불가 → 비일시적(1)" test "$(claude_failure_kind "쓰레기" 0)" = "1"
+REASON="$(claude_failure_reason "$LIMIT_JSON")"
+t "실패 사유에 상태코드 노출" grep -q "api_error_status=429" <<<"$REASON"
+t "실패 사유에 원문 메시지 노출" grep -q "session limit" <<<"$REASON"
+t "fix.sh: 일시적 실패는 예산 미차감" grep -q 'attempts=\$((attempts - 1))' "$ROOT/automation/fix.sh"
+t "fix.sh: 일시적 실패는 exit 3 으로 구분" grep -q 'exit 3' "$ROOT/automation/fix.sh"
+t "run.sh: exit 3 을 llm-unavailable 로 보고" grep -q 'llm-unavailable' "$ROOT/automation/run.sh"
+t "리포트가 '시도하지 못했다' 로 명시" grep -q '시도하지 못했습니다' "$ROOT/tools/build_report.py"
+t "claude 응답 원문을 남긴다(사후 진단)" grep -q 'claude.last.json' "$ROOT/automation/lib/claude.sh"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"

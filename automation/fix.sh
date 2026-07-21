@@ -158,8 +158,19 @@ $(visual_evidence)
 실패 근거:
 $ERRTAIL"
 
-  claude_call "$REPO" "Read Edit Grep Glob" "$PROMPT" >/dev/null \
-    || ui_warn "claude 호출 실패 — 이번 시도는 수정 없이 재검증"
+  if ! claude_call "$REPO" "Read Edit Grep Glob" "$PROMPT" >/dev/null; then
+    ck=$?
+    if [ "$ck" = "2" ]; then
+      # 일시적 인프라 실패(사용량 한도·네트워크·타임아웃)는 '수정 시도' 가 아니다.
+      # 예산을 깎고 재검증까지 돌리면 (a) 20분을 헛돌고 (b) 리포트가 "AI 가 시도했으나
+      # 해결 못 함" 이라고 사실과 다르게 보고한다(실측 2026-07-21: 429 session limit).
+      attempts=$((attempts - 1))
+      echo "$attempts" >"$ATT_FILE"
+      ui_err "[fix] LLM 호출 불가(일시적) — 예산 미차감, 이번 실행은 수정 없이 중단. 사유: $(claude_failure_reason "$(cat "$WORKSPACE/claude.last.json" 2>/dev/null)")"
+      exit 3   # 3 = LLM 사용 불가(재시도하면 될 일) — 1(수정 실패) 과 구분
+    fi
+    ui_warn "claude 응답을 쓸 수 없음 — 이번 시도는 수정 없이 재검증"
+  fi
 
   bad=$(fix_scope_violations "$REPO")
   if [ -n "$bad" ]; then

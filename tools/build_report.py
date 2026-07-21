@@ -25,6 +25,7 @@ TITLES = {
     "render":       ("a2ui-dali 자동 릴리스 — 렌더 실패 ⛔", 1),
     "infra":        ("a2ui-dali 자동 릴리스 — 인프라 오류 ⛔", 1),
     "release-push": ("a2ui-dali 자동 릴리스 — push 실패 ⛔", 1),
+    "llm-unavailable": ("a2ui-dali 자동 릴리스 — LLM 호출 불가로 중단 ⏸", 1),
 }
 
 
@@ -136,6 +137,10 @@ def main():
         # triage 가 있으면 UPSTREAM 만, 없으면(=분류 미수행) 기존대로 전부 후보로 노출한다.
         for e in (upstream if triage else damaged):
             print(f"[golden-candidate] {e['name']}")
+    elif args.outcome == "llm-unavailable":
+        # '시도했지만 못 고쳤다' 와 '아예 시도하지 못했다' 는 사람이 취할 행동이 다르다.
+        tldr = (f"dali-ui **{ui_tag}** — AI 코드 적응을 **시도하지 못했습니다**(LLM 호출 불가: "
+                f"{args.detail}). 코드 문제로 판명된 것이 아니므로, 한도/네트워크 회복 후 재실행하면 됩니다.")
     else:
         tldr = f"dali-ui **{ui_tag}** 처리 중 실패({args.outcome}) — {args.detail}"
 
