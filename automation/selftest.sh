@@ -352,6 +352,148 @@ t "render preflight: 에셋 루트 부재 → 하드 실패" bash -c \
 t "render preflight: 코퍼스 참조 에셋 존재 검증" bash -c \
   "grep -q 'sample-images/' '$ROOT/automation/render.sh'"
 
+ui_step "[selftest] 9) 시각 회귀 원인 분리 (코드 버그 vs 업스트림 렌더링 변화)"
+# 게이트 RED 는 두 가지 전혀 다른 상황을 담는다. 코드 버그를 '골든 승인' 으로 보내면 깨진
+# 화면이 새 기준선이 되고, 업스트림 변화를 'AI 수정' 으로 보내면 정상 동작을 뜯어고치려 든다.
+# triage.sh 가 이 둘을 가르며, 아래는 그 경계와 보수 기본값을 실제 실행으로 못박는다.
+TDIR="$TESTWS/triage"
+TBIN="$TESTWS/bin_triage"
+mkdir -p "$TDIR/side" "$TBIN"
+
+# compare.json/verdicts.json 픽스처 생성기: 사유·diff·판정을 인자로 받는다.
+mk_triage_fixture() { # $1=name $2=reason $3=diff(또는 null) $4=verdict
+  python3 -c '
+import json, sys
+name, reason, diff, verdict = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+d = None if diff == "null" else float(diff)
+json.dump([{"name": name, "diff": d, "status": "REVIEW", "reason": reason,
+            "card": "side/%s.side.png" % name}], open(sys.argv[5], "w"))
+json.dump([{"name": name, "verdict": verdict, "rationale": "테스트 근거"}], open(sys.argv[6], "w"))
+' "$1" "$2" "$3" "$4" "$TDIR/compare.json" "$TDIR/verdicts.json"
+  : >"$TDIR/side/$1.side.png"
+}
+triage_class_source() { # triage.json 첫 샘플의 분류 출처(deterministic|vision|default)
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d[0]["source"] if d else "NONE")' "$TDIR/triage.json"
+}
+
+# claude 스텁: 첫 줄이 판정. STUB_VERDICT 로 제어.
+cat >"$TBIN/claude" <<'STUB'
+#!/bin/bash
+printf '{"result":"%s\\n테스트 근거","is_error":false}\n' "${STUB_VERDICT:-UPSTREAM}"
+STUB
+chmod +x "$TBIN/claude"
+cat >"$TBIN/claude_fail" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+chmod +x "$TBIN/claude_fail"
+
+# 9a) 결정적 백스톱 — 모델을 부르지 않고도 코드 문제로 확정되어야 하는 신호들.
+#     (claude 를 '항상 UPSTREAM' 스텁으로 깔아둬도 CODE 가 나와야 한다 = 모델 우회 증명)
+for tc in "새 렌더가 거의 균일 — 빈 화면 의심|0.9|빈화면" \
+          "크기 불일치 (480, 1280)→(480, 640)|null|크기불일치" \
+          "새 렌더 없음(렌더 실패)|null|렌더실패" \
+          "diff=3.100|3.1|대형차이"; do
+  IFS='|' read -r _reason _diff _label <<<"$tc"
+  mk_triage_fixture "s_$_label" "$_reason" "$_diff" "DAMAGED"
+  OUT=$(PATH="$TBIN:$PATH" STUB_VERDICT=UPSTREAM bash "$ROOT/automation/triage.sh" "$TDIR" 2>/dev/null | tail -1)
+  t "결정적 백스톱($_label) → CODE (모델 판정 무시)" bash -c \
+    "[ '$OUT' = CODE ] && [ \"\$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[0][\"source\"])' '$TDIR/triage.json')\" = deterministic ]"
+done
+
+# 9b) 백스톱에 안 걸리는 미세 차이 → 모델 분류를 따른다 (UPSTREAM 가능).
+mk_triage_fixture "s_drift" "diff=0.060" "0.06" "DAMAGED"
+OUT=$(PATH="$TBIN:$PATH" STUB_VERDICT=UPSTREAM bash "$ROOT/automation/triage.sh" "$TDIR" 2>/dev/null | tail -1)
+t "미세 차이 + 비전 UPSTREAM → UPSTREAM (골든 승인 경로)" test "$OUT" = "UPSTREAM"
+t "분류 출처가 vision 으로 기록" test "$(triage_class_source)" = "vision"
+
+# 9c) 보수 기본값: 판정 불가(호출 실패 / 알 수 없는 답) → CODE.
+mk_triage_fixture "s_drift" "diff=0.060" "0.06" "DAMAGED"
+OUT=$(PATH="$TBIN:$PATH" STUB_VERDICT="MAYBE" bash "$ROOT/automation/triage.sh" "$TDIR" 2>/dev/null | tail -1)
+t "분류 답 파싱 불가 → CODE (fail-closed)" bash -c "[ '$OUT' = CODE ]"
+cp "$TBIN/claude_fail" "$TBIN/claude"
+OUT=$(PATH="$TBIN:$PATH" bash "$ROOT/automation/triage.sh" "$TDIR" 2>/dev/null | tail -1)
+t "분류 호출 실패 → CODE (fail-closed)" bash -c "[ '$OUT' = CODE ]"
+cat >"$TBIN/claude" <<'STUB'
+#!/bin/bash
+printf '{"result":"%s\\n테스트 근거","is_error":false}\n' "${STUB_VERDICT:-UPSTREAM}"
+STUB
+chmod +x "$TBIN/claude"
+
+# 9d) 입력 자체가 없거나 깨졌을 때도 조용히 통과하지 않는다.
+rm -f "$TDIR/compare.json" "$TDIR/verdicts.json"
+OUT=$(PATH="$TBIN:$PATH" bash "$ROOT/automation/triage.sh" "$TDIR" 2>/dev/null | tail -1)
+t "triage 입력 없음 → CODE (조용한 통과 없음)" bash -c "[ '$OUT' = CODE ]"
+printf 'not json' >"$TDIR/compare.json"
+printf '[]' >"$TDIR/verdicts.json"
+OUT=$(PATH="$TBIN:$PATH" bash "$ROOT/automation/triage.sh" "$TDIR" 2>/dev/null | tail -1)
+t "triage 입력 손상 → CODE (fail-closed)" bash -c "[ '$OUT' = CODE ]"
+
+# 9e) ACCEPTABLE 만 있으면 분류 대상 없음 → NONE (게이트가 RED 가 아니므로 여기 오지도 않음)
+mk_triage_fixture "s_ok" "diff=0.060" "0.06" "ACCEPTABLE"
+OUT=$(PATH="$TBIN:$PATH" bash "$ROOT/automation/triage.sh" "$TDIR" 2>/dev/null | tail -1)
+t "DAMAGED 없음 → NONE" bash -c "[ '$OUT' = NONE ]"
+
+# 9f) 골든 후보 마커는 UPSTREAM 샘플에만 붙는다 — 코드 버그를 '승인하시겠습니까' 로 띄우면
+#     사람이 깨진 화면을 기준선으로 만들 수 있다.
+GD="$TESTWS/golden_marker"
+mkdir -p "$GD/compare/side" "$GD/artifacts"
+python3 -c '
+import json, sys
+base = sys.argv[1]
+json.dump([{"name":"bug","diff":3.5,"status":"REVIEW","reason":"diff=3.500","card":"side/bug.side.png"},
+           {"name":"drift","diff":0.06,"status":"REVIEW","reason":"diff=0.060","card":"side/drift.side.png"}],
+          open(base+"/compare/compare.json","w"))
+json.dump([{"name":"bug","verdict":"DAMAGED","rationale":"카드 붕괴"},
+           {"name":"drift","verdict":"DAMAGED","rationale":"글자 두께 변화"}],
+          open(base+"/compare/verdicts.json","w"))
+json.dump([{"name":"bug","class":"CODE","source":"deterministic","rationale":"구조 훼손"},
+           {"name":"drift","class":"UPSTREAM","source":"vision","rationale":"레이아웃과 콘텐츠는 온전"}],
+          open(base+"/compare/triage.json","w"))
+' "$GD"
+: >"$GD/compare/side/bug.side.png"
+: >"$GD/compare/side/drift.side.png"
+MARKERS=$(python3 "$ROOT/tools/build_report.py" --outcome gate-damage --rundir "$GD" \
+  --artifacts "$GD/artifacts" --out "$GD/report.md" 2>/dev/null | grep -c '^\[golden-candidate\]')
+t "골든 후보 마커: UPSTREAM 1건만 노출" test "$MARKERS" = "1"
+t "골든 후보 마커: 코드 버그 샘플은 미노출" bash -c \
+  "! python3 '$ROOT/tools/build_report.py' --outcome gate-damage --rundir '$GD' --artifacts '$GD/artifacts' --out '$GD/report.md' 2>/dev/null | grep -q '^\[golden-candidate\] bug'"
+t "리포트 TL;DR: 코드 문제는 골든 승인 대상이 아님을 명시" bash -c \
+  "grep -q '골든 승인 대상이 아니라' '$GD/report.md'"
+t "리포트: 샘플별 원인 분류 표기" bash -c \
+  "grep -q '원인: \*\*업스트림 렌더링 변화\*\*' '$GD/report.md' && grep -q '원인: \*\*코드 버그\*\*' '$GD/report.md'"
+
+# 9g) 수정 예산은 모드별로 독립 — 빌드가 예산을 다 써도 visual 몫이 남아야 한다.
+t "fix 예산 모드별 분리(.fix_attempts.<mode>)" grep -q 'ATT_FILE="\$RD/.fix_attempts.\$MODE"' "$ROOT/automation/fix.sh"
+t "visual 전용 예산 상한(MAX_VISUAL_FIX_ATTEMPTS)" grep -q 'MAX_VISUAL_FIX_ATTEMPTS' "$ROOT/automation/fix.sh"
+# 9h) visual 재검증 오라클 = 재빌드→재렌더→재비교→재판정 GREEN (모델 자기신고 금지)
+sed -n '/^retry_check()/,/^}/p' "$ROOT/automation/fix.sh" >"$TESTWS/retry_check.txt"
+t "visual 오라클: 재빌드 포함" grep -q 'build_a2ui.sh' "$TESTWS/retry_check.txt"
+t "visual 오라클: 전수 재렌더 포함" grep -q 'render.sh' "$TESTWS/retry_check.txt"
+t "visual 오라클: baseline 재비교 포함" grep -q 'compare.sh' "$TESTWS/retry_check.txt"
+t "visual 오라클: 비전 재판정 GREEN 요구" grep -q 'judge.sh' "$TESTWS/retry_check.txt"
+t "visual 오라클: GREEN 아니면 실패" grep -q 'GREEN' "$TESTWS/retry_check.txt"
+# 9i) run.sh 라우팅: RED → triage → CODE 는 AI 수정, UPSTREAM 은 사람 승인
+t "run.sh: RED 시 triage 호출" grep -q 'automation/triage.sh' "$ROOT/automation/run.sh"
+t "run.sh: CODE → fix.sh visual" grep -q 'fix.sh" visual' "$ROOT/automation/run.sh"
+t "run.sh: UPSTREAM → 골든 갱신 승인 필요로 차단" grep -q '골든 갱신 승인 필요' "$ROOT/automation/run.sh"
+# 9j) 증거 조립: CODE 샘플만 프롬프트에 실린다 (정상 동작을 고치려 들지 않도록)
+EV=$(python3 -c "
+import sys; sys.path.insert(0, '$ROOT/tools')
+from visual_evidence import build
+print(build('$GD/compare', '$ROOT/corpus/jsonl'))")
+t "증거 조립: CODE 샘플만 포함" bash -c "grep -q 'bug' <<<\"\$(cat <<'E'
+$EV
+E
+)\" && ! grep -q 'drift' <<<\"\$(cat <<'E'
+$EV
+E
+)\""
+t "증거 조립: 비교 이미지 경로 포함(모델이 Read 로 연다)" bash -c "grep -q 'side/bug.side.png' <<<\"\$(cat <<'E'
+$EV
+E
+)\""
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"

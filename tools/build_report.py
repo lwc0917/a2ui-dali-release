@@ -64,6 +64,9 @@ def main():
             target[k] = v
     compare = read_json(os.path.join(rd, "compare", "compare.json"), [])
     verdicts = {v["name"]: v for v in read_json(os.path.join(rd, "compare", "verdicts.json"), [])}
+    # 원인 분류(triage.sh): 훼손 샘플이 '코드 버그'인지 '업스트림 렌더링 변화'인지.
+    triage = {t["name"]: t for t in read_json(os.path.join(rd, "compare", "triage.json"), [])
+              if isinstance(t, dict) and "name" in t}
     release = read_json(os.path.join(rd, "release.json"), {})
     conf = read_text(os.path.join(rd, "conformance.txt")) or "n/a"
     fix_n = read_text(os.path.join(rd, ".fix_attempts")) or "0"
@@ -95,13 +98,28 @@ def main():
         tldr = "새 dali-ui 릴리스 태그 없음 — 할 일 없음."
     elif args.outcome == "gate-damage":
         names = ", ".join(e["name"] for e in damaged) or "?"
-        tldr = (f"dali-ui **{ui_tag}** 빌드는 성공했으나 시각 게이트 RED — "
-                f"**{names}** 손상 판정으로 릴리스 보류. 사람 확인 필요.")
+        # 골든 후보로 '승인'을 권할 수 있는 것은 업스트림 렌더링 변화로 분류된 샘플뿐이다.
+        # 코드 버그를 골든으로 승인하면 깨진 화면이 그대로 다음 기준선이 된다.
+        upstream = [e for e in damaged if triage.get(e["name"], {}).get("class") == "UPSTREAM"]
+        code_bugs = [e for e in damaged if triage.get(e["name"], {}).get("class") == "CODE"]
+        if code_bugs:
+            tldr = (f"dali-ui **{ui_tag}** 빌드는 성공했으나 시각 게이트 RED — "
+                    f"**{', '.join(e['name'] for e in code_bugs)}** 은 렌더러 코드 문제로 분류되어 "
+                    f"AI 수정을 시도했으나 해결하지 못했습니다(시도 {fix_n}회). 골든 승인 대상이 아니라 "
+                    f"코드 수정이 필요합니다.")
+        elif upstream:
+            tldr = (f"dali-ui **{ui_tag}** 시각 게이트 RED — **{', '.join(e['name'] for e in upstream)}** 은 "
+                    f"업스트림 렌더링 변화로 분류됨(코드 버그 아님). 이미지를 확인하고 기준선 갱신을 "
+                    f"승인하면 릴리스됩니다.")
+        else:
+            tldr = (f"dali-ui **{ui_tag}** 빌드는 성공했으나 시각 게이트 RED — "
+                    f"**{names}** 손상 판정으로 릴리스 보류. 사람 확인 필요.")
         # Golden-candidate markers (hub golden review): the run page surfaces each damaged
         # sample's baseline|new|diff card (<name>.side.png, staged into artifacts/ below) so a
         # human can approve the candidate as the new golden — a force_accept re-run then releases
         # and rotates the baseline. One marker per damaged sample; the hub greps these from the log.
-        for e in damaged:
+        # triage 가 있으면 UPSTREAM 만, 없으면(=분류 미수행) 기존대로 전부 후보로 노출한다.
+        for e in (upstream if triage else damaged):
             print(f"[golden-candidate] {e['name']}")
     else:
         tldr = f"dali-ui **{ui_tag}** 처리 중 실패({args.outcome}) — {args.detail}"
@@ -142,8 +160,14 @@ def main():
                   f"(허용 {len(accepted)} / 손상 {len(damaged)})", ""]
         for e in reviews:
             v = verdicts.get(e["name"], {})
+            t = triage.get(e["name"], {})
+            cls = ""
+            if t.get("class") == "CODE":
+                cls = f" · 원인: **코드 버그**({t.get('source','')}) — {t.get('rationale','')}"
+            elif t.get("class") == "UPSTREAM":
+                cls = f" · 원인: **업스트림 렌더링 변화**({t.get('source','')}) — {t.get('rationale','')}"
             lines.append(f"  - `{e['name']}` — {e['reason']} → "
-                         f"**{v.get('verdict','미판정')}** {v.get('rationale','')}")
+                         f"**{v.get('verdict','미판정')}** {v.get('rationale','')}{cls}")
         if reviews:
             lines.append("")
 

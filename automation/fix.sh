@@ -1,8 +1,10 @@
 #!/bin/bash
-# fix.sh build|conformance — Claude 코드 적응 루프.
+# fix.sh build|conformance|visual — Claude 코드 적응 루프.
 # 원칙: Claude 는 a2ui-dali 클론의 src/ 만 수정(파일 도구만, Bash/git 금지).
 #       빌드/테스트/되돌리기는 전부 오케스트레이터(이 스크립트)가 실행.
-# 예산: build+conformance 합산 MAX_FIX_ATTEMPTS 회 ($RUNDIR/.fix_attempts 로 공유).
+# 예산: 모드별로 독립 ($RUNDIR/.fix_attempts.<mode>). 예전엔 하나를 공유해서 빌드가 3회를
+#       다 쓰면 conformance/visual 몫이 0 이 되어, 빌드는 고쳐놓고 다음 관문에서 즉시 막혔다.
+#       리포트용 누적 합계는 $RUNDIR/.fix_attempts 에 계속 기록한다.
 # 안티게이밍: 시도마다 diff 검사 — src/ 밖 수정(test/·CMakeLists·packaging/ 등)은 거부+되돌림.
 #
 # fix.sh --lib : 함수 정의만 (selftest 용)
@@ -32,19 +34,30 @@ if [ "${1:-}" = "--lib" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
-MODE="${1:?build|conformance}"
+MODE="${1:?build|conformance|visual}"
 REPO="$SRC/a2ui-dali"
-ATT_FILE="${RUNDIR:-$WORKSPACE}/.fix_attempts"
+RD="${RUNDIR:-$WORKSPACE}"
+ATT_FILE="$RD/.fix_attempts.$MODE"     # 모드별 예산
+TOTAL_FILE="$RD/.fix_attempts"         # 리포트용 누적 합계
 attempts=$(cat "$ATT_FILE" 2>/dev/null || echo 0)
+BUDGET="$MAX_FIX_ATTEMPTS"
 
 case "$MODE" in
 build)
-  LOG="${RUNDIR:-$WORKSPACE}/a2ui_build.log"
+  LOG="$RD/a2ui_build.log"
   TASK="컴파일이 되도록 dali-ui API 변화를 적응"
   ;;
 conformance)
-  LOG="${RUNDIR:-$WORKSPACE}/conformance.log"
+  LOG="$RD/conformance.log"
   TASK="conformance 테스트가 전 항목 통과하도록 렌더러 동작을 복원"
+  ;;
+visual)
+  # 시각 회귀: 빌드도 conformance 도 통과했는데 '그림'이 달라진 경우. triage.sh 가
+  # CODE(= 우리 렌더러가 새 dali-ui 에서 잘못 그림)로 분류한 샘플만 여기로 온다.
+  # 1회 시도가 빌드+렌더36+비교+비전판정이라 비싸므로 기본 예산은 더 짧다.
+  LOG="$RD/compare/triage.json"
+  TASK="시각 회귀를 제거 — 이전 릴리스와 같은 화면이 나오도록 렌더러 코드를 새 dali-ui 에 맞게 적응"
+  BUDGET="${MAX_VISUAL_FIX_ATTEMPTS:-2}"
   ;;
 *)
   ui_err "unknown mode: $MODE"
@@ -60,15 +73,41 @@ retry_check() {
     bash "$ROOT/automation/build_a2ui.sh" build \
       && bash "$ROOT/automation/conformance.sh"
     ;;
+  visual)
+    # 오라클은 '게이트가 실제로 GREEN 이 되는가' 하나뿐이다: 재빌드 → 전수 재렌더 →
+    # baseline 대비 재비교 → 비전 재판정. 모델의 "고쳤습니다" 는 아무 효력이 없고,
+    # 여기서 GREEN 이 나와야만 수정이 인정된다(그리고 그 렌더가 그대로 릴리스에 실린다).
+    bash "$ROOT/automation/build_a2ui.sh" build \
+      && bash "$ROOT/automation/render.sh" "$RD/new" \
+      && bash "$ROOT/automation/compare.sh" "$WORKSPACE/baseline" "$RD/new" "$RD/compare" \
+      && [ "$(bash "$ROOT/automation/judge.sh" "$RD/compare" | tail -1)" = "GREEN" ]
+    ;;
   esac
 }
 
-while [ "$attempts" -lt "$MAX_FIX_ATTEMPTS" ]; do
+# visual 모드 프롬프트에 실을 증거: 어떤 샘플이 어떻게 깨졌는지 + 사람이 보는 것과 같은
+# side-by-side 카드의 절대경로(Claude 가 Read 로 이미지를 직접 본다) + 그 샘플의 코퍼스 입력.
+visual_evidence() {
+  python3 "$ROOT/tools/visual_evidence.py" "$RD/compare" "$ROOT/corpus/jsonl"
+}
+
+while [ "$attempts" -lt "$BUDGET" ]; do
   attempts=$((attempts + 1))
   echo "$attempts" >"$ATT_FILE"
-  ui_step "[fix] Claude 코드 적응 시도 $attempts/$MAX_FIX_ATTEMPTS ($MODE)"
+  # 리포트용 누적(모드 합계)
+  cat "$RD"/.fix_attempts.* 2>/dev/null | awk 'BEGIN{s=0} {s+=$1} END{print s+0}' >"$TOTAL_FILE" || true
+  ui_step "[fix] Claude 코드 적응 시도 $attempts/$BUDGET ($MODE)"
 
-  ERRTAIL=$(tail -n 150 "$LOG" 2>/dev/null || echo "(로그 없음)")
+  if [ "$MODE" = "visual" ]; then
+    ERRTAIL="빌드와 conformance 는 통과했지만, 이전 릴리스 대비 '화면'이 달라졌습니다.
+아래 샘플들은 '업스트림 렌더링 변화'가 아니라 '우리 렌더러 코드의 버그'로 분류되었습니다.
+
+$(visual_evidence)
+
+각 샘플의 비교 이미지를 Read 로 직접 열어 무엇이 깨졌는지 확인한 뒤 원인을 고치세요."
+  else
+    ERRTAIL=$(tail -n 150 "$LOG" 2>/dev/null || echo "(로그 없음)")
+  fi
   PROMPT="a2ui-dali 렌더러가 새 dali-ui (${DALI_UI_TAG:-unknown}, core/adaptor ${CORE_ADAPTOR_TAG:-unknown}) 에 대해 실패했습니다.
 임무: src/ 아래 렌더러 소스만 수정해 $TASK 하세요.
 
@@ -78,7 +117,10 @@ while [ "$attempts" -lt "$MAX_FIX_ATTEMPTS" ]; do
 - 존재가 불확실한 dali-ui 심볼을 지어내지 말 것. 설치된 실제 헤더를 Read 로 확인 가능: $PREFIX/include/dali-ui-foundation/, $PREFIX/include/dali-ui-components/
 - 참고(과거 2.5.28 재편 패턴): 빌더 헤더 devel-api/builder → integration-api/builder (타입 Dali::Ui::TreeNode → Dali::Ui::Integration::TreeNode), 뷰/텍스트 헤더가 public-api/{views,types,configuration}/ 카테고리 디렉토리로 이동, fluent 체이닝 setter 가 void 반환으로 변경, Label::SetUnderline → SetTextUnderline.
 
-실패 로그 (마지막 150줄):
+- 게이트를 우회하는 어떤 시도도 금지 — 코퍼스/기준선/비교 임계값은 애초에 수정 범위 밖이고,
+  화면을 비우거나 요소를 지워서 차이를 줄이는 '수정'은 빈 화면 백스톱에 걸려 거부된다.
+
+실패 근거:
 $ERRTAIL"
 
   claude_call "$REPO" "Read Edit Grep Glob" "$PROMPT" >/dev/null \
@@ -97,5 +139,5 @@ $ERRTAIL"
   fi
 done
 
-ui_err "fix 예산 소진 ($attempts/$MAX_FIX_ATTEMPTS) — $MODE 미해결"
+ui_err "fix 예산 소진 ($attempts/$BUDGET) — $MODE 미해결"
 exit 1

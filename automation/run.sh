@@ -101,7 +101,28 @@ if [ "$GATE" != "GREEN" ]; then
   else
     [ -n "${FORCE_ACCEPT:-}" ] \
       && ui_warn "FORCE_ACCEPT='$FORCE_ACCEPT' 가 타깃 '$DALI_UI_TAG' 과 불일치 — 오버라이드 무시(차단)"
-    fail gate-damage "시각 게이트 RED — 손상 판정 샘플 존재 (리포트 참조)"
+    # ── [triage] RED 의 원인을 가른다 ────────────────────────────────────────
+    # 화면이 달라진 데는 두 가지 다른 이유가 있고, 대응이 정반대다:
+    #   CODE     = 우리 렌더러가 새 dali-ui 에서 잘못 그림 → AI 가 src/ 를 고칠 문제.
+    #   UPSTREAM = 플랫폼 렌더링 자체가 바뀜 → 기준선을 갱신할지 '사람'이 결정할 문제.
+    # 예전엔 둘을 구분하지 않고 전부 사람에게 "이걸 골든으로 승인할래?" 라고 물었다.
+    # 그래서 코드 버그도 승인 한 번이면 깨진 화면이 새 기준선이 될 수 있었다.
+    TRIAGE=$(bash "$ROOT/automation/triage.sh" "$RUNDIR/compare" | tail -1)
+    if [ "$TRIAGE" = "CODE" ]; then
+      ui_step "[fix] 시각 회귀가 코드 문제로 분류됨 — AI 수정 루프 진입"
+      if bash "$ROOT/automation/fix.sh" visual; then
+        # fix.sh visual 은 게이트가 실제로 GREEN 이 된 경우에만 0 을 반환한다
+        # (재빌드 → 전수 재렌더 → 재비교 → 재판정까지 통과). 그 렌더가 릴리스에 실린다.
+        GATE=GREEN
+        ui_ok "시각 회귀 AI 수정 성공 — 게이트 GREEN 재확인, 릴리스 진행"
+      else
+        fail gate-damage "시각 게이트 RED — 코드 수정 시도했으나 미해결 (리포트의 원인 분류/시도 내역 참조)"
+      fi
+    else
+      # 업스트림 렌더링 변화로 분류 → 코드를 뜯어고칠 일이 아니다. 사람이 side-by-side 를
+      # 보고 골든 갱신을 승인하면 force_accept 재실행으로 릴리스된다.
+      fail gate-damage "시각 게이트 RED — 업스트림 렌더링 변화로 분류, 골든 갱신 승인 필요 (리포트 참조)"
+    fi
   fi
 else
   ui_ok "게이트 GREEN"
