@@ -58,6 +58,10 @@ visual)
   LOG="$RD/compare/triage.json"
   TASK="시각 회귀를 제거 — 이전 릴리스와 같은 화면이 나오도록 렌더러 코드를 새 dali-ui 에 맞게 적응"
   BUDGET="${MAX_VISUAL_FIX_ATTEMPTS:-2}"
+  # 재검증이 같은 compare/ 에 덮어쓰기 때문에, 수정이 성공하면 '무엇이 깨져 있었는지'가
+  # 통째로 사라진다(실측: 리포트가 '손상 0'이 되어 깨끗한 재빌드와 구분 불가). 수정 전
+  # 상태를 먼저 스냅샷해 두고, 리포트가 그걸로 '무엇을 AI 가 고쳤는지'를 보고한다.
+  [ -d "$RD/compare_pre_fix" ] || cp -a "$RD/compare" "$RD/compare_pre_fix" 2>/dev/null || true
   ;;
 *)
   ui_err "unknown mode: $MODE"

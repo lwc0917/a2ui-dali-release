@@ -67,6 +67,17 @@ def main():
     # 원인 분류(triage.sh): 훼손 샘플이 '코드 버그'인지 '업스트림 렌더링 변화'인지.
     triage = {t["name"]: t for t in read_json(os.path.join(rd, "compare", "triage.json"), [])
               if isinstance(t, dict) and "name" in t}
+    # AI 가 시각 회귀를 고친 run 은 재검증이 compare/ 를 전부 PASS 로 덮어쓴다. 수정 전
+    # 스냅샷(fix.sh visual 이 남김)이 있으면 '무엇이 깨져 있었고 무엇을 고쳤는지'를 보고한다 —
+    # 없으면 리포트가 '손상 0'만 보여서 깨끗한 재빌드와 구분되지 않는다.
+    pre_dir = os.path.join(rd, "compare_pre_fix")
+    pre_compare = read_json(os.path.join(pre_dir, "compare.json"), [])
+    pre_verdicts = {v["name"]: v for v in read_json(os.path.join(pre_dir, "verdicts.json"), [])
+                    if isinstance(v, dict) and "name" in v}
+    pre_triage = {t["name"]: t for t in read_json(os.path.join(pre_dir, "triage.json"), [])
+                  if isinstance(t, dict) and "name" in t}
+    pre_damaged = [e for e in pre_compare
+                   if pre_verdicts.get(e.get("name"), {}).get("verdict") == "DAMAGED"]
     release = read_json(os.path.join(rd, "release.json"), {})
     conf = read_text(os.path.join(rd, "conformance.txt")) or "n/a"
     fix_n = read_text(os.path.join(rd, ".fix_attempts")) or "0"
@@ -81,15 +92,19 @@ def main():
     core_tag = target.get("CORE_ADAPTOR_TAG", "?")
 
     # ── TL;DR ──
+    ai_fixed = (f" 시각 회귀 {len(pre_damaged)}건(" +
+                ", ".join(e["name"] for e in pre_damaged) +
+                f")은 AI 가 코드로 수정 후 게이트 재통과(시도 {fix_n}회)." ) if pre_damaged else ""
     if args.outcome == "success":
         tldr = (f"dali-ui **{ui_tag}** 대응 재빌드·검증 후 a2ui-dali "
                 f"**v{release.get('old_version','?')} → v{release.get('new_version','?')}** "
                 f"({release.get('bump','?')}) 자동 릴리스 완료. "
                 f"게이트: PASS {n_pass}/{len(compare)}"
-                + (f", 허용 드리프트 {len(accepted)}건" if accepted else "") + ".")
+                + (f", 허용 드리프트 {len(accepted)}건" if accepted else "") + "." + ai_fixed)
     elif args.outcome == "dry-run":
         tldr = (f"DRY RUN — dali-ui **{ui_tag}** 기준 전 파이프라인 GREEN. "
-                f"실제였다면 v{release.get('new_version','?')} ({release.get('bump','?')}) 릴리스.")
+                f"실제였다면 v{release.get('new_version','?')} ({release.get('bump','?')}) 릴리스."
+                + ai_fixed)
     elif args.outcome == "skipped":
         tldr = f"dali-ui **{ui_tag}** 은 이미 릴리스에 반영됨 — 멱등 생략. ({release.get('note','')})"
     elif args.outcome == "bootstrap":
@@ -171,6 +186,22 @@ def main():
         if reviews:
             lines.append("")
 
+    # ── AI 가 고친 시각 회귀 (수정 전 스냅샷 기준) ──
+    # 재검증이 compare/ 를 전부 PASS 로 덮어쓰므로, 이 섹션이 없으면 "AI 가 렌더링 버그를
+    # 조용히 고쳐서 그 렌더를 릴리스했다" 와 "그냥 깨끗한 재빌드였다" 가 리포트에서 구분되지 않는다.
+    if pre_damaged:
+        lines += ["### AI 가 고친 시각 회귀", "",
+                  f"- 수정 전 손상 {len(pre_damaged)}건 → 코드 수정 후 게이트 재통과 "
+                  f"(Claude 코드수정 시도 {fix_n}회). 아래는 **수정 전** 상태이며, "
+                  f"수정 후 렌더는 갤러리에서 확인.", ""]
+        for e in pre_damaged:
+            v = pre_verdicts.get(e["name"], {})
+            t = pre_triage.get(e["name"], {})
+            lines.append(f"  - `{e['name']}` — {e.get('reason','')} → **{v.get('verdict','')}** "
+                         f"{v.get('rationale','')} · 원인 분류: {t.get('class','?')}"
+                         f"({t.get('source','')}) — {t.get('rationale','')}")
+        lines.append("")
+
     # ── 진단 ──
     if diagnosis:
         lines += ["### 진단 (Claude)", "", diagnosis, ""]
@@ -206,6 +237,25 @@ def main():
                                  f"판정 {v.get('verdict','미판정')}"})
     if items:
         sections.append({"title": "변경/손상 샘플 (baseline | new | diff)", "items": items})
+
+    # AI 가 고친 회귀의 '수정 전' 카드 — 사람이 무엇이 깨졌었는지 눈으로 확인할 수 있어야 한다.
+    pre_items = []
+    for e in pre_damaged:
+        card = e.get("card")
+        if not card:
+            continue
+        src = os.path.join(pre_dir, card)
+        if not os.path.exists(src):
+            continue
+        fn = "prefix_" + os.path.basename(card)
+        shutil.copy(src, os.path.join(args.artifacts, fn))
+        v = pre_verdicts.get(e["name"], {})
+        pre_items.append({"file": fn,
+                          "caption": f"[수정 전] {e['name']} · {e.get('reason','')} · "
+                                     f"판정 {v.get('verdict','')}"})
+    if pre_items:
+        sections.append({"title": "AI 가 고친 시각 회귀 — 수정 전 (baseline | new | diff)",
+                         "items": pre_items})
 
     # 성공 계열: 개별 렌더 전수 — 사람이 hub 에서 샘플별로 '잘 그려졌는지' 직접 확인
     if args.outcome in ("success", "dry-run", "skipped", "bootstrap"):

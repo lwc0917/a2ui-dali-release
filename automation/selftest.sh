@@ -494,6 +494,62 @@ $EV
 E
 )\""
 
+ui_step "[selftest] 10) e2e 에서 드러난 구멍 3건 회귀 방지"
+# 10a) triage 로그가 명령치환에 삼켜지지 않는다 — 콘솔에 '왜 그렇게 분류했는지'가 남아야
+#      사람이 오분류를 잡을 수 있다(실측: run.log 에 [triage] 줄이 하나도 없었음).
+t "run.sh: triage 로그를 tee 로 노출" grep -q 'triage.sh" "\$RUNDIR/compare" | tee /dev/stderr' "$ROOT/automation/run.sh"
+
+# 10b) 시각 수정 성공 시 '무엇이 깨져 있었는지'가 사라지지 않는다.
+#      재검증이 compare/ 를 전부 PASS 로 덮어쓰므로, 수정 전 스냅샷이 없으면 리포트가
+#      '손상 0' 이 되어 깨끗한 재빌드와 구분되지 않는다(무인 운영에서 치명적).
+t "fix.sh visual: 수정 전 compare 스냅샷 생성" grep -q 'compare_pre_fix' "$ROOT/automation/fix.sh"
+PF="$TESTWS/prefix_report"
+mkdir -p "$PF/compare_pre_fix/side" "$PF/compare" "$PF/artifacts" "$PF/new"
+python3 -c '
+import json, sys
+base = sys.argv[1]
+# 수정 후 상태: 전부 PASS (재검증이 덮어쓴 모습)
+json.dump([{"name":"pick","diff":0.0,"status":"PASS","reason":"","card":None}],
+          open(base+"/compare/compare.json","w"))
+json.dump([], open(base+"/compare/verdicts.json","w"))
+# 수정 전 스냅샷: 손상 1건 + 코드 버그로 분류
+json.dump([{"name":"pick","diff":0.994,"status":"REVIEW","reason":"diff=0.994",
+            "card":"side/pick.side.png"}], open(base+"/compare_pre_fix/compare.json","w"))
+json.dump([{"name":"pick","verdict":"DAMAGED","rationale":"선택 칩이 통째로 미렌더"}],
+          open(base+"/compare_pre_fix/verdicts.json","w"))
+json.dump([{"name":"pick","class":"CODE","source":"vision","rationale":"콘텐츠 누락 = 코드 버그"}],
+          open(base+"/compare_pre_fix/triage.json","w"))
+' "$PF"
+: >"$PF/compare_pre_fix/side/pick.side.png"
+printf '1' >"$PF/.fix_attempts"
+python3 "$ROOT/tools/build_report.py" --outcome dry-run --rundir "$PF" \
+  --artifacts "$PF/artifacts" --out "$PF/report.md" >/dev/null 2>&1
+t "리포트 TL;DR: AI 가 고친 시각 회귀를 명시" grep -q 'AI 가 코드로 수정' "$PF/report.md"
+t "리포트: 수정 전 손상 내역 섹션" grep -q '### AI 가 고친 시각 회귀' "$PF/report.md"
+t "리포트: 수정 전 근거(판정·분류) 표기" bash -c \
+  "grep -q '선택 칩이 통째로 미렌더' '$PF/report.md' && grep -q 'CODE(vision)' '$PF/report.md'"
+t "artifacts: 수정 전 side 카드 스테이징" test -f "$PF/artifacts/prefix_pick.side.png"
+t "artifacts: 수정 전 섹션 등록" grep -q '수정 전' "$PF/artifacts/index.json"
+
+# 10c) README 호환표 설명 초안 정규화 — 모델이 '한 줄' 지시를 어기고 근거 표를 덧붙인
+#      1,100자 블롭이 실측으로 관측됐다. 그대로면 표 셀이 파괴된다.
+norm_desc() { # stdin 초안 → 정규화 결과 (release.sh 와 동일 로직)
+  local d
+  d=$(sed 's/\r$//' | grep -v '^[[:space:]]*$' | head -1 |
+    tr '|' ' ' | sed 's/^[[:space:]]*[-*#>][[:space:]]*//; s/  */ /g; s/^ *//; s/ *$//')
+  if [ ${#d} -gt "${COMPAT_DESC_MAX:-200}" ]; then d=""; fi
+  printf '%s' "$d"
+}
+t "정규화: 정상 한 줄은 그대로" bash -c \
+  "[ \"\$(printf 'new headers under \`public-api/views\`' | { $(declare -f norm_desc); norm_desc; })\" = 'new headers under \`public-api/views\`' ]"
+t "정규화: 근거 표가 붙은 블롭은 첫 줄만" bash -c \
+  "[ \"\$(printf 'phrase only\n\n근거 (src/ 실제 참조)\n| a | b |\n| c | d |' | { $(declare -f norm_desc); norm_desc; })\" = 'phrase only' ]"
+t "정규화: 파이프 제거(표 셀 파손 방지)" bash -c \
+  "! printf 'a | b' | { $(declare -f norm_desc); norm_desc; } | grep -q '|'"
+t "정규화: 상한 초과 초안은 폐기(원문 유지)" bash -c \
+  "[ -z \"\$(python3 -c 'print(\"x\"*300)' | { $(declare -f norm_desc); norm_desc; })\" ]"
+t "release.sh: 상한 가드 존재" grep -q 'COMPAT_DESC_MAX' "$ROOT/automation/release.sh"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"

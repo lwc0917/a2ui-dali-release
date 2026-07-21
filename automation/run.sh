@@ -107,7 +107,10 @@ if [ "$GATE" != "GREEN" ]; then
     #   UPSTREAM = 플랫폼 렌더링 자체가 바뀜 → 기준선을 갱신할지 '사람'이 결정할 문제.
     # 예전엔 둘을 구분하지 않고 전부 사람에게 "이걸 골든으로 승인할래?" 라고 물었다.
     # 그래서 코드 버그도 승인 한 번이면 깨진 화면이 새 기준선이 될 수 있었다.
-    TRIAGE=$(bash "$ROOT/automation/triage.sh" "$RUNDIR/compare" | tail -1)
+    # judge 와 같은 tee: triage 의 진행/근거 로그(ui_*)는 stdout 으로 나가는데 명령치환이
+    # 통째로 삼켜버려, run.log 에는 분류 '결과'만 남고 '왜' 가 사라졌었다(실측). 사람이 콘솔에서
+    # 분류 근거를 볼 수 있어야 오분류를 잡아낼 수 있으므로 stderr 로 흘려보낸다.
+    TRIAGE=$(bash "$ROOT/automation/triage.sh" "$RUNDIR/compare" | tee /dev/stderr | tail -1)
     if [ "$TRIAGE" = "CODE" ]; then
       ui_step "[fix] 시각 회귀가 코드 문제로 분류됨 — AI 수정 루프 진입"
       if bash "$ROOT/automation/fix.sh" visual; then

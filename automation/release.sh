@@ -122,8 +122,16 @@ if [ "$CODE_CHANGED" = 1 ]; then
 
 현재 설명(참고): $OLD_DESC"
   DESC=$(claude_call "$REPO" "Read Grep Glob" "$CPROMPT") || DESC=""
-  # 한 줄 정규화 + 파이프 제거(표 셀 파손 방지). 내용이 남으면만 초안 기록.
-  DESC=$(printf '%s' "$DESC" | tr '\n|' '  ' | sed 's/  */ /g; s/^ *//; s/ *$//')
+  # 정규화: 모델이 '한 줄만' 이라는 지시를 어기고 근거 표까지 덧붙이는 일이 실측으로 확인됐다
+  # (1,100자 블롭 + 마크다운 표). 예전 정규화는 개행을 공백으로 바꾸기만 해서 그 블롭이 통째로
+  # README 표 셀에 들어갈 수 있었다. 그래서 (1) 첫 번째 의미 있는 줄만 취하고, (2) 파이프 제거,
+  # (3) 길이 상한을 넘거나 표/머리말 흔적이 있으면 초안을 폐기해 원문 설명을 유지한다(보수 폴백).
+  DESC=$(printf '%s' "$DESC" | sed 's/\r$//' | grep -v '^[[:space:]]*$' | head -1 |
+    tr '|' ' ' | sed 's/^[[:space:]]*[-*#>][[:space:]]*//; s/  */ /g; s/^ *//; s/ *$//')
+  if [ ${#DESC} -gt "${COMPAT_DESC_MAX:-200}" ]; then
+    ui_warn "README 설명 초안이 상한(${COMPAT_DESC_MAX:-200}자)을 초과 (${#DESC}자) — 폐기하고 원문 유지"
+    DESC=""
+  fi
   [ -n "$DESC" ] && printf '%s' "$DESC" >"$COMPAT_DRAFT"
   if [ -s "$COMPAT_DRAFT" ]; then ui_info "README 설명 셀 갱신 초안 준비됨"; else ui_info "README 설명 갱신 없음 — 원문 유지"; fi
 fi
