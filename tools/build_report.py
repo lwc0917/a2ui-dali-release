@@ -140,9 +140,15 @@ def main():
         # sample's baseline|new|diff card (<name>.side.png, staged into artifacts/ below) so a
         # human can approve the candidate as the new golden — a force_accept re-run then releases
         # and rotates the baseline. One marker per damaged sample; the hub greps these from the log.
-        # triage 가 있으면 UPSTREAM 만, 없으면(=분류 미수행) 기존대로 전부 후보로 노출한다.
-        for e in (upstream if triage else damaged):
-            print(f"[golden-candidate] {e['name']}")
+        # 골든 승인 버튼은 '골든 결정이 유일한 잔여 차단 요인' 일 때만 띄운다(thorvg 의
+        # other_blocking_failures 와 같은 정책; 실측 2026-07-22 교차감사). 코드 버그가 남아 있으면
+        # 승인해도 릴리스가 안 되고 — FORCE_ACCEPT 는 all-or-nothing 이라 아직 안 고쳐진 코드
+        # 샘플까지 함께 내보낸다 — 사람은 '이것만 승인하면 끝' 이라 오해한다. 그 경우엔 위 TLDR 의
+        # 코드-수정 실패 사유로 보고하고 후보 마커를 찍지 않는다(승인 버튼 미노출). code_bugs 가
+        # 없을 때만: triage 있으면 UPSTREAM 만, 없으면(분류 미수행) 기존대로 전부 후보로 노출.
+        if not code_bugs:
+            for e in (upstream if triage else damaged):
+                print(f"[golden-candidate] {e['name']}")
     elif args.outcome == "llm-unavailable":
         # '시도했지만 못 고쳤다' 와 '아예 시도하지 못했다' 는 사람이 취할 행동이 다르다.
         tldr = (f"dali-ui **{ui_tag}** — AI 코드 적응을 **시도하지 못했습니다**(LLM 호출 불가: "

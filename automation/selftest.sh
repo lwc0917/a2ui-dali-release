@@ -455,11 +455,29 @@ json.dump([{"name":"bug","class":"CODE","source":"deterministic","rationale":"�
 : >"$GD/compare/side/drift.side.png"
 MARKERS=$(python3 "$ROOT/tools/build_report.py" --outcome gate-damage --rundir "$GD" \
   --artifacts "$GD/artifacts" --out "$GD/report.md" 2>/dev/null | grep -c '^\[golden-candidate\]')
-t "골든 후보 마커: UPSTREAM 1건만 노출" test "$MARKERS" = "1"
-t "골든 후보 마커: 코드 버그 샘플은 미노출" bash -c \
-  "! python3 '$ROOT/tools/build_report.py' --outcome gate-damage --rundir '$GD' --artifacts '$GD/artifacts' --out '$GD/report.md' 2>/dev/null | grep -q '^\[golden-candidate\] bug'"
+# 코드 버그(bug)가 남아 있으면 골든 승인 버튼을 하나도 띄우지 않는다 — UPSTREAM(drift)도 포함.
+# FORCE_ACCEPT 는 all-or-nothing 이라, drift 만 승인하려 해도 안 고쳐진 bug 까지 릴리스된다.
+# 릴리스-준비가 아니므로 승인 유도 대신 코드-수정 실패로 보고한다(실측 2026-07-22 교차감사).
+t "골든 후보 마커: 코드 버그가 남으면 아무 후보도 미노출(승인 유도 금지)" test "$MARKERS" = "0"
 t "리포트 TL;DR: 코드 문제는 골든 승인 대상이 아님을 명시" bash -c \
   "grep -q '골든 승인 대상이 아니라' '$GD/report.md'"
+# 릴리스-준비(코드 버그 없이 UPSTREAM 드리프트만) 이면 골든 승인 버튼이 정상 노출된다.
+GDU="$TESTWS/golden_marker_upstream_only"
+mkdir -p "$GDU/compare/side" "$GDU/artifacts"
+python3 -c '
+import json, sys
+base = sys.argv[1]
+json.dump([{"name":"drift","diff":0.06,"status":"REVIEW","reason":"diff=0.060","card":"side/drift.side.png"}],
+          open(base+"/compare/compare.json","w"))
+json.dump([{"name":"drift","verdict":"DAMAGED","rationale":"글자 두께 변화"}],
+          open(base+"/compare/verdicts.json","w"))
+json.dump([{"name":"drift","class":"UPSTREAM","source":"vision","rationale":"레이아웃과 콘텐츠는 온전"}],
+          open(base+"/compare/triage.json","w"))
+' "$GDU"
+: >"$GDU/compare/side/drift.side.png"
+MARKERS_U=$(python3 "$ROOT/tools/build_report.py" --outcome gate-damage --rundir "$GDU" \
+  --artifacts "$GDU/artifacts" --out "$GDU/report.md" 2>/dev/null | grep -c '^\[golden-candidate\]')
+t "골든 후보 마커: UPSTREAM 만 남으면(릴리스-준비) 후보 노출" test "$MARKERS_U" = "1"
 t "리포트: 샘플별 원인 분류 표기" bash -c \
   "grep -q '원인: \*\*업스트림 렌더링 변화\*\*' '$GD/report.md' && grep -q '원인: \*\*코드 버그\*\*' '$GD/report.md'"
 
