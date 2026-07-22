@@ -199,7 +199,16 @@ $ERRTAIL"
       ui_err "[fix] LLM 호출 불가(일시적) — 예산 미차감, 이번 실행은 수정 없이 중단. 사유: $(claude_failure_reason "$(cat "$WORKSPACE/claude.last.json" 2>/dev/null)")"
       exit 3   # 3 = LLM 사용 불가(재시도하면 될 일) — 1(수정 실패) 과 구분
     fi
-    ui_warn "claude 응답을 쓸 수 없음 — 이번 시도는 수정 없이 재검증"
+    # claude_call 이 실패를 반환해도 Claude 는 acceptEdits 로 파일을 실시간 편집했을 수 있다
+    # (실측 2026-07-22: 반환은 실패인데 flex-container.cpp 등 6개가 수정되어 26_podcast 가
+    # diff 0.0 이 됐다). '수정 없이 재검증' 이라 찍으면 실제 수정을 못 한 것처럼 오보된다.
+    # 편집 여부를 git 으로 직접 확인해 정확히 로깅한다 — 오라클은 어차피 아래 retry_check.
+    _edited=$(git -C "$REPO" status --porcelain 2>/dev/null | grep -c '^.M\|^M\|^??' || echo 0)
+    if [ "$_edited" -gt 0 ]; then
+      ui_warn "claude 반환은 실패지만 파일 ${_edited}개가 실제로 편집됨 — 그 편집으로 재검증(수정 없음 아님)"
+    else
+      ui_warn "claude 응답을 쓸 수 없음 + 편집도 없음 — 이번 시도는 사실상 무동작"
+    fi
   fi
 
   bad=$(fix_scope_violations "$REPO")

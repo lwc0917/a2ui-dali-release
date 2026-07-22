@@ -114,22 +114,28 @@ def main():
         tldr = "새 dali-ui 릴리스 태그 없음 — 할 일 없음."
     elif args.outcome == "gate-damage":
         names = ", ".join(e["name"] for e in damaged) or "?"
+        # AI 가 수정한 회귀와 '최종 남은' 손상을 분리한다. 예전엔 수정 전 DAMAGED 였다가 고쳐진
+        # 샘플(예: 26_podcast-episode diff 0.0)까지 code_bugs 로 잡혀 "AI 가 해결하지 못했습니다"
+        # 라고 오보했다(실측 2026-07-22). 사람이 취할 행동이 정반대이므로 반드시 구분한다.
+        pre_names = {e.get("name") for e in pre_damaged}
+        now_names = {e.get("name") for e in damaged}
+        fixed = sorted(pre_names - now_names)          # AI 가 실제로 고친 것
         # 골든 후보로 '승인'을 권할 수 있는 것은 업스트림 렌더링 변화로 분류된 샘플뿐이다.
-        # 코드 버그를 골든으로 승인하면 깨진 화면이 그대로 다음 기준선이 된다.
         upstream = [e for e in damaged if triage.get(e["name"], {}).get("class") == "UPSTREAM"]
         code_bugs = [e for e in damaged if triage.get(e["name"], {}).get("class") == "CODE"]
+        fixed_note = (f" 이번에 AI 가 {len(fixed)}건({', '.join(fixed)})은 코드로 고쳐 통과시켰습니다." if fixed else "")
         if code_bugs:
             tldr = (f"dali-ui **{ui_tag}** 빌드는 성공했으나 시각 게이트 RED — "
                     f"**{', '.join(e['name'] for e in code_bugs)}** 은 렌더러 코드 문제로 분류되어 "
                     f"AI 수정을 시도했으나 해결하지 못했습니다(시도 {fix_n}회). 골든 승인 대상이 아니라 "
-                    f"코드 수정이 필요합니다.")
+                    f"코드 수정이 필요합니다.{fixed_note}")
         elif upstream:
             tldr = (f"dali-ui **{ui_tag}** 시각 게이트 RED — **{', '.join(e['name'] for e in upstream)}** 은 "
                     f"업스트림 렌더링 변화로 분류됨(코드 버그 아님). 이미지를 확인하고 기준선 갱신을 "
-                    f"승인하면 릴리스됩니다.")
+                    f"승인하면 릴리스됩니다.{fixed_note}")
         else:
             tldr = (f"dali-ui **{ui_tag}** 빌드는 성공했으나 시각 게이트 RED — "
-                    f"**{names}** 손상 판정으로 릴리스 보류. 사람 확인 필요.")
+                    f"**{names}** 손상 판정으로 릴리스 보류. 사람 확인 필요.{fixed_note}")
         # Golden-candidate markers (hub golden review): the run page surfaces each damaged
         # sample's baseline|new|diff card (<name>.side.png, staged into artifacts/ below) so a
         # human can approve the candidate as the new golden — a force_accept re-run then releases

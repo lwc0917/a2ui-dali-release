@@ -24,6 +24,9 @@ claude_call() {
   # 으로 보고됐다(실측 2026-07-21: session limit → 수정 시도 0회인데 예산만 소진).
   printf '%s' "$raw" > "$WORKSPACE/claude.last.json" 2>/dev/null || true
   if [ $rc -ne 0 ]; then
+    # 실패 원문은 덮어쓰지 말고 보존한다 — claude.last.json 은 매 호출마다 덮여서 정작 실패한
+    # 호출의 원문이 사라지고 진단이 불가능했다(실측 2026-07-22). 실패만 append.
+    { echo "=== rc=$rc $(date +%H:%M:%S) ==="; printf '%s\n' "$raw"; } >> "$WORKSPACE/claude.failures.log" 2>/dev/null || true
     ui_warn "claude 호출 실패 (rc=$rc, timeout=$CLAUDE_TIMEOUT s)"
     return "$(claude_failure_kind "$raw" "$rc")"
   fi
@@ -39,6 +42,7 @@ if d.get("is_error"):
 print(d.get("result", ""))
 '); then
     # 실패 사유를 사람이 읽을 수 있게 남긴다(한도/네트워크/거부를 구분해야 대응이 갈린다).
+    { echo "=== parse-fail $(date +%H:%M:%S) ==="; printf '%s\n' "$raw"; } >> "$WORKSPACE/claude.failures.log" 2>/dev/null || true
     ui_warn "claude 응답 오류: $(claude_failure_reason "$raw")"
     return "$(claude_failure_kind "$raw" 0)"
   fi

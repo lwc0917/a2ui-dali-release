@@ -653,6 +653,41 @@ t "music: 안 쓰는 image.cpp 는 미포함" bash -c "! grep -q 'components/ima
 t "레이아웃 공통(render-internal.h) 항상 포함" grep -q 'render-internal.h' <<<"$OUT"
 t "fix.sh visual 프롬프트가 소스 안내를 싣는다" grep -q 'visual_source_hint' "$ROOT/automation/fix.sh"
 
+ui_step "[selftest] 14) LLM 실패/부분성공 오보 방지"
+# 실측(2026-07-22): (a) Claude 가 파일을 편집했는데 claude_call 반환이 실패라 '수정 없이 재검증'
+# 으로 오보, (b) AI 가 26_podcast 를 diff 0.0 으로 고쳤는데 리포트가 '해결하지 못했습니다' 로 오보
+# (남은 건 다른 샘플 30 이었다). 사람이 취할 행동이 정반대이므로 반드시 구분한다.
+t "claude.sh: 실패 원문 보존(덮어쓰기 방지)" grep -q 'claude.failures.log' "$ROOT/automation/lib/claude.sh"
+t "fix.sh: 편집 여부를 git 으로 확인" grep -q '파일 .*개가 실제로 편집됨' "$ROOT/automation/fix.sh"
+t "fix.sh: 편집 없을 때만 '무동작'" grep -q '편집도 없음' "$ROOT/automation/fix.sh"
+# build_report: 고친 것/남은 것 분리 — 스냅샷으로 재현
+BR="$TESTWS/br"; mkdir -p "$BR/compare" "$BR/compare_pre_fix" "$BR/artifacts"
+python3 -c '
+import json,sys
+base=sys.argv[1]
+# 수정 후: 26 은 PASS, 30 만 DAMAGED
+json.dump([{"name":"26_podcast-episode","diff":0.0,"status":"PASS","reason":""},
+           {"name":"30_live-invitation-builder","diff":2.27,"status":"REVIEW","reason":"diff=2.27","card":"side/30.side.png"}],
+          open(base+"/compare/compare.json","w"))
+json.dump([{"name":"30_live-invitation-builder","verdict":"DAMAGED","rationale":"원격 이미지 흔들림"}],
+          open(base+"/compare/verdicts.json","w"))
+json.dump([{"name":"30_live-invitation-builder","class":"CODE","source":"vision","rationale":"x"}],
+          open(base+"/compare/triage.json","w"))
+# 수정 전: 26 이 DAMAGED 였다
+json.dump([{"name":"26_podcast-episode","diff":8.98,"status":"REVIEW","reason":"diff=8.98","card":"side/26.side.png"}],
+          open(base+"/compare_pre_fix/compare.json","w"))
+json.dump([{"name":"26_podcast-episode","verdict":"DAMAGED","rationale":"썸네일 밀림"}],
+          open(base+"/compare_pre_fix/verdicts.json","w"))
+json.dump([{"name":"26_podcast-episode","class":"CODE","source":"deterministic","rationale":"y"}],
+          open(base+"/compare_pre_fix/triage.json","w"))
+' "$BR"
+mkdir -p "$BR/compare/side"; : >"$BR/compare/side/30.side.png"
+printf '3' >"$BR/.fix_attempts"
+python3 "$ROOT/tools/build_report.py" --outcome gate-damage --rundir "$BR" --artifacts "$BR/artifacts" --out "$BR/report.md" >/dev/null 2>&1
+t "리포트: AI 가 26 을 고쳤음을 명시" grep -q 'AI 가 1건(26_podcast-episode)은 코드로 고쳐 통과' "$BR/report.md"
+t "리포트: 최종 남은 건 30(다른 샘플)" grep -q '30_live-invitation-builder' "$BR/report.md"
+t "리포트: 고친 26 을 '미해결'로 표기 안 함" bash -c "! grep -q '26_podcast-episode.*해결하지 못' '$BR/report.md'"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"
