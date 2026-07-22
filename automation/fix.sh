@@ -119,6 +119,28 @@ visual_evidence() {
   python3 "$ROOT/tools/visual_evidence.py" "$RD/compare" "$ROOT/corpus/jsonl"
 }
 
+# CODE 로 분류된(=고칠) 샘플들이 어느 렌더러 소스로 그려지는지 결정적으로 안내한다.
+# 시각 회귀는 컴파일 에러와 달리 '어디를 고쳐야 하는지' 단서가 없다 — 그래서 모델이 엉뚱한
+# 파일을 건드려 렌더가 안 바뀌었다(실측 2026-07-22). 코퍼스의 component 타입 → 레지스트리의
+# 타입→소스 매핑으로, 그 샘플을 그리는 파일을 짚어준다.
+visual_source_hint() {
+  local names
+  names="$(python3 -c '
+import json, sys
+try:
+    t = json.load(open(sys.argv[1] + "/triage.json"))
+    print(" ".join(x["name"] for x in t if isinstance(x, dict) and x.get("class") == "CODE"))
+except Exception:
+    try:
+        v = json.load(open(sys.argv[1] + "/verdicts.json"))
+        print(" ".join(x["name"] for x in v if isinstance(x, dict) and x.get("verdict") == "DAMAGED"))
+    except Exception:
+        print("")' "$RD/compare")"
+  [ -n "$names" ] || return 0
+  # shellcheck disable=SC2086
+  python3 "$ROOT/tools/component_sources.py" "$SRC/a2ui-dali" "$ROOT/corpus/jsonl" $names 2>/dev/null
+}
+
 while [ "$attempts" -lt "$BUDGET" ]; do
   attempts=$((attempts + 1))
   echo "$attempts" >"$ATT_FILE"
@@ -132,7 +154,15 @@ while [ "$attempts" -lt "$BUDGET" ]; do
 
 $(visual_evidence)
 
-각 샘플의 비교 이미지를 Read 로 직접 열어 무엇이 깨졌는지 확인한 뒤 원인을 고치세요."
+이 샘플들이 '어느 렌더러 소스로 그려지는지' 는 결정적으로 파악돼 있습니다. 추측하지 말고
+아래 파일부터 Read/Grep 으로 원인을 찾으세요(정렬·간격은 컨테이너인 flex-container.cpp 가,
+아이콘/이미지는 각 컴포넌트 파일이 결정합니다):
+
+$(visual_source_hint)
+
+각 샘플의 비교 이미지를 Read 로 직접 열어 무엇이 깨졌는지 확인하고, 위 소스에서 원인을
+고치세요. 수정 후 렌더가 실제로 바뀌는지가 유일한 성공 기준입니다 — 엉뚱한 파일을 고치면
+diff 가 그대로라 재검증에서 반려됩니다."
   else
     ERRTAIL=$(tail -n 150 "$LOG" 2>/dev/null || echo "(로그 없음)")
   fi

@@ -620,6 +620,39 @@ t "run.sh: exit 3 을 llm-unavailable 로 보고" grep -q 'llm-unavailable' "$RO
 t "리포트가 '시도하지 못했다' 로 명시" grep -q '시도하지 못했습니다' "$ROOT/tools/build_report.py"
 t "claude 응답 원문을 남긴다(사후 진단)" grep -q 'claude.last.json' "$ROOT/automation/lib/claude.sh"
 
+ui_step "[selftest] 13) 시각 회귀 → 소스 파일 결정적 안내 (component_sources)"
+# 실측(2026-07-22): 모델이 증상은 정확히 진단하고도 엉뚱한 파일(view-pool.cpp/tabs.cpp)을 고쳐
+# 렌더가 소수점까지 안 바뀌었다. 원인은 하네스가 '어느 소스가 이 컴포넌트를 그리나' 를 안 줬기
+# 때문. 코퍼스 component 타입 → 레지스트리 매핑으로 그 소스를 결정적으로 짚는지 검증한다.
+CS="$ROOT/tools/component_sources.py"
+REPO="$WORKSPACE/csrepo"
+mkdir -p "$REPO/src/renderer/components"
+cat > "$REPO/src/renderer/a2ui-renderer.cpp" <<'CPP'
+void A2uiRenderer::RegisterStandardCatalog() {
+  mRegistry.Register("Image",  [this](const C& c, R& rc){ return RenderImage(c, rc.data); });
+  mRegistry.Register("Icon",   [this](const C& c, R& rc){ return RenderIcon(c, rc.data); });
+  mRegistry.Register("Row",    [this](const C& c, R& rc){ return RenderFlexContainer(c, FD::ROW); });
+}
+CPP
+echo 'View RenderImage(const C& c, D d) { }' > "$REPO/src/renderer/components/image.cpp"
+echo 'View RenderIcon(const C& c, D d) { }'  > "$REPO/src/renderer/components/icon.cpp"
+echo 'View RenderFlexContainer(const C& c, FD d) { }' > "$REPO/src/renderer/components/flex-container.cpp"
+echo '// item gap' > "$REPO/src/renderer/render-internal.h"
+CORP="$WORKSPACE/cscorpus"; mkdir -p "$CORP"
+printf '{"updateComponents":{"components":[{"component":"Row","children":[{"component":"Image"}]}]}}\n' > "$CORP/podcast.jsonl"
+printf '{"updateComponents":{"components":[{"component":"Icon"}]}}\n' > "$CORP/music.jsonl"
+
+OUT="$(python3 "$CS" "$REPO" "$CORP" podcast)"
+t "podcast: 쓰는 컴포넌트에 Image·Row 포함" bash -c "grep -q 'Image' <<<\"$OUT\" && grep -q 'Row' <<<\"$OUT\""
+t "podcast: 정렬 원인 flex-container.cpp 안내" grep -q 'components/flex-container.cpp' <<<"$OUT"
+t "podcast: Image 렌더 소스 image.cpp 안내" grep -q 'components/image.cpp' <<<"$OUT"
+t "podcast: 안 쓰는 icon.cpp 는 미포함" bash -c "! grep -q 'components/icon.cpp' <<<\"$OUT\""
+OUT2="$(python3 "$CS" "$REPO" "$CORP" music)"
+t "music: 아이콘 원인 icon.cpp 안내" grep -q 'components/icon.cpp' <<<"$OUT2"
+t "music: 안 쓰는 image.cpp 는 미포함" bash -c "! grep -q 'components/image.cpp' <<<\"$OUT2\""
+t "레이아웃 공통(render-internal.h) 항상 포함" grep -q 'render-internal.h' <<<"$OUT"
+t "fix.sh visual 프롬프트가 소스 안내를 싣는다" grep -q 'visual_source_hint' "$ROOT/automation/fix.sh"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"
