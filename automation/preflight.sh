@@ -36,6 +36,18 @@ opt "릴리스 리모트 접근($A2UI_GIT_REMOTE)" \
     "$(timeout 20 git ls-remote "$A2UI_GIT_REMOTE" HEAD >/dev/null 2>&1 && echo 0 || echo 1)" \
     "게이트를 통과해도 릴리스 push 에서 실패한다(읽기 전용/자격증명 없음)"
 
+# 코퍼스가 결정적으로 렌더 가능한가 — 로컬화되지 않은 원격 이미지 URL 이 남아 있으면 그 샘플만
+# 회색 플레이스홀더로 렌더돼 게이트가 비결정적이 된다(필수는 아니고 경고: vendored 이미지가
+# 있으면 render.sh 가 채운다). 무엇이 원격인지 알려준다.
+if [ -f "$ROOT/tools/check_corpus_assets.py" ]; then
+  if python3 "$ROOT/tools/check_corpus_assets.py" "$ROOT/corpus/jsonl" >/dev/null 2>&1; then
+    ui_ok "  [권장] 코퍼스 이미지 전부 로컬(결정적 렌더)"
+  else
+    ui_warn "  [권장] 코퍼스에 원격 이미지 URL 잔존 — 게이트가 비결정적일 수 있다:"
+    python3 "$ROOT/tools/check_corpus_assets.py" "$ROOT/corpus/jsonl" 2>&1 | grep -E "jsonl:" | while read -r _l; do ui_warn "    $_l"; done
+  fi
+fi
+
 if [ "$MISSING" != "0" ]; then
   ui_err "[preflight] 필수 항목 누락 — 실행을 시작하지 않는다."
   exit 1

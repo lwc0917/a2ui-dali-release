@@ -27,6 +27,18 @@ fi
 # 구조적으로 못 잡으므로(둘 다 플레이스홀더 → diff 0 → PASS), 렌더 전에 절대검증한다.
 RENDER_RES_DIR="$(cd "$(dirname "$A2UI_RENDERER")/.." && pwd)/res"
 [ -d "$RENDER_RES_DIR" ] || { ui_err "렌더 에셋 루트 없음: $RENDER_RES_DIR — 이미지가 전부 빈 채로 렌더된다"; exit 1; }
+# 코퍼스가 참조하지만 렌더러 레포(매 실행 새로 clone)에는 없는 이미지를, 우리 레포에 vendored
+# 해 둔 corpus/sample-images 에서 채운다. 렌더러 레포는 sample-images 를 15개만 추적하는데
+# 코퍼스는 16개를 참조한다(30_live-invitation-builder 의 원래 unsplash 이미지를 로컬화한 것).
+# 이게 없으면 그 샘플만 회색 플레이스홀더로 렌더되어 게이트가 비결정적이 된다(실측 2026-07-22).
+if [ -d "$ROOT/corpus/sample-images" ]; then
+  mkdir -p "$RENDER_RES_DIR/sample-images"
+  for _img in "$ROOT/corpus/sample-images"/*; do
+    [ -e "$_img" ] || continue
+    _b="$(basename "$_img")"
+    [ -f "$RENDER_RES_DIR/sample-images/$_b" ] || cp "$_img" "$RENDER_RES_DIR/sample-images/$_b"
+  done
+fi
 _missing_assets=$(grep -ohE '[A-Za-z0-9_./-]*sample-images/[A-Za-z0-9_.-]+\.(jpg|jpeg|png|webp)' \
   "$ROOT"/corpus/jsonl/*.jsonl 2>/dev/null | sed 's#^.*sample-images/#sample-images/#' | sort -u |
   while read -r _rel; do [ -f "$RENDER_RES_DIR/$_rel" ] || echo "$_rel"; done)

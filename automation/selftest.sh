@@ -688,6 +688,26 @@ t "리포트: AI 가 26 을 고쳤음을 명시" grep -q 'AI 가 1건(26_podcast
 t "리포트: 최종 남은 건 30(다른 샘플)" grep -q '30_live-invitation-builder' "$BR/report.md"
 t "리포트: 고친 26 을 '미해결'로 표기 안 함" bash -c "! grep -q '26_podcast-episode.*해결하지 못' '$BR/report.md'"
 
+ui_step "[selftest] 15) 코퍼스 결정성 — 원격 이미지 URL 검출 + vendored 복구"
+# 실측(2026-07-22): 36종 중 30_live-invitation-builder 만 원격 unsplash URL 이 남아 회색
+# 플레이스홀더로 렌더됐고, AI 가 26 을 diff 0.0 으로 고쳐도 30 때문에 게이트가 비결정적으로
+# RED 였다. 원격 이미지 검출 + vendored 복구 검증.
+CA="$ROOT/tools/check_corpus_assets.py"
+CD="$TESTWS/corpus1"; mkdir -p "$CD"
+printf '{"createSurface":{"catalogId":"https://a2ui.org/spec/catalog.json"}}\n{"components":[{"component":"Image","url":"sample-images/local.jpg"}]}\n' > "$CD/ok.jsonl"
+t "로컬 이미지만 → 결정적(rc0)" bash -c "python3 '$CA' '$CD' >/dev/null 2>&1"
+printf '{"components":[{"component":"Image","url":"https://images.unsplash.com/photo-abc?w=400"}]}\n' > "$CD/bad.jsonl"
+t "원격 이미지 URL 검출(rc1)" bash -c "! python3 '$CA' '$CD' >/dev/null 2>&1"
+t "카탈로그 스펙 URL 은 이미지 아님(오탐 없음)" bash -c "
+  printf '{\"createSurface\":{\"catalogId\":\"https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json\"}}\n' > '$CD/cat.jsonl'
+  rm -f '$CD/bad.jsonl'
+  python3 '$CA' '$CD' >/dev/null 2>&1"
+t "실제 코퍼스는 이제 전부 로컬(30 로컬화 완료)" bash -c "python3 '$CA' '$ROOT/corpus/jsonl' >/dev/null 2>&1"
+t "vendored 이미지 디렉터리 존재" test -d "$ROOT/corpus/sample-images"
+t "30 의 로컬화 이미지가 vendored 됨" bash -c "ls '$ROOT/corpus/sample-images'/*.jpg >/dev/null 2>&1"
+t "render.sh 가 vendored 이미지를 res 로 복사" grep -q 'corpus/sample-images' "$ROOT/automation/render.sh"
+t "preflight 가 코퍼스 결정성 점검" grep -q 'check_corpus_assets' "$ROOT/automation/preflight.sh"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"
