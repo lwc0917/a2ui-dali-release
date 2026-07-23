@@ -481,6 +481,29 @@ t "골든 후보 마커: UPSTREAM 만 남으면(릴리스-준비) 후보 노출"
 t "리포트: 샘플별 원인 분류 표기" bash -c \
   "grep -q '원인: \*\*업스트림 렌더링 변화\*\*' '$GD/report.md' && grep -q '원인: \*\*코드 버그\*\*' '$GD/report.md'"
 
+# 9f-2) UPSTREAM 자동 승격(outcome=success + 손상 샘플) → '감사용' 갤러리로 명확히 라벨링
+#       (승인 버튼 아님). 사람이 리포트를 훑다 오분류를 눈으로 잡게 하기 위함(정책 2026-07-23).
+AP="$TESTWS/auto_promote_audit"
+mkdir -p "$AP/compare/side" "$AP/artifacts"
+python3 -c '
+import json, sys
+base = sys.argv[1]
+json.dump([{"name":"drift","diff":0.09,"status":"REVIEW","reason":"diff=0.090","card":"side/drift.side.png"}],
+          open(base+"/compare/compare.json","w"))
+json.dump([{"name":"drift","verdict":"DAMAGED","rationale":"글자 두께 변화"}],
+          open(base+"/compare/verdicts.json","w"))
+json.dump([{"name":"drift","class":"UPSTREAM","source":"vision","rationale":"레이아웃·콘텐츠 온전, 래스터라이즈 차이"}],
+          open(base+"/compare/triage.json","w"))
+' "$AP"
+: >"$AP/compare/side/drift.side.png"
+python3 "$ROOT/tools/build_report.py" --outcome success --rundir "$AP" \
+  --artifacts "$AP/artifacts" --out "$AP/report.md" >/dev/null 2>&1
+t "자동 승격 감사: index.json 에 '감사용' 섹션" bash -c \
+  "grep -q '자동 골든 승격됨 — 감사용' '$AP/artifacts/index.json'"
+t "자동 승격 감사: 승인 버튼(golden-candidate) 은 안 뜬다" bash -c \
+  "! python3 '$ROOT/tools/build_report.py' --outcome success --rundir '$AP' --artifacts '$AP/artifacts' --out '$AP/report.md' 2>/dev/null | grep -q '^\[golden-candidate\]'"
+t "자동 승격 감사: 승격된 샘플 카드가 스테이징됨" test -f "$AP/artifacts/drift.side.png"
+
 # 9g) 수정 예산은 모드별로 독립 — 빌드가 예산을 다 써도 visual 몫이 남아야 한다.
 t "fix 예산 모드별 분리(.fix_attempts.<mode>)" grep -q 'ATT_FILE="\$RD/.fix_attempts.\$MODE"' "$ROOT/automation/fix.sh"
 t "visual 전용 예산 상한(MAX_VISUAL_FIX_ATTEMPTS)" grep -q 'MAX_VISUAL_FIX_ATTEMPTS' "$ROOT/automation/fix.sh"

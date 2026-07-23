@@ -239,6 +239,12 @@ def main():
         sections.append({"title": "갤러리 요약 시트",
                          "items": [{"file": "gallery_sheet.png",
                                     "caption": f"전체 {len(compare)}종 렌더 (new 기준)"}]})
+    # success 인데 손상(DAMAGED) 샘플이 있으면 = 그 손상은 전부 UPSTREAM 으로 분류돼 '사람 승인
+    # 없이 자동 골든 승격' 된 것이다(코드 버그가 하나라도 있었으면 triage 가 CODE 를 출력해 릴리스
+    # 자체가 안 된다). 이걸 승인 버튼이 아니라 '감사용 갤러리' 로 명확히 라벨링해, 사람이 리포트를
+    # 훑다가 오분류(실제 코드 회귀인데 UPSTREAM)를 눈으로 잡을 수 있게 한다(정책 2026-07-23).
+    auto_promoted = args.outcome == "success" and any(
+        verdicts.get(e["name"], {}).get("verdict") == "DAMAGED" for e in reviews)
     items = []
     for e in reviews:
         if not e.get("card"):
@@ -249,11 +255,16 @@ def main():
         fn = os.path.basename(e["card"])
         shutil.copy(src, os.path.join(args.artifacts, fn))
         v = verdicts.get(e["name"], {})
-        items.append({"file": fn,
-                      "caption": f"{e['name']} · {e['reason']} · "
-                                 f"판정 {v.get('verdict','미판정')}"})
+        cap = f"{e['name']} · {e['reason']} · 판정 {v.get('verdict','미판정')}"
+        if auto_promoted and v.get("verdict") == "DAMAGED":
+            t = triage.get(e["name"], {})
+            cap += f" · ⚠️ 사람 승인 없이 자동 골든 승격({t.get('class','?')}): {t.get('rationale','')}"
+        items.append({"file": fn, "caption": cap})
     if items:
-        sections.append({"title": "변경/손상 샘플 (baseline | new | diff)", "items": items})
+        title = ("⚠️ 자동 골든 승격됨 — 감사용 (사람 승인 없이 이번 렌더가 새 기준선이 됨; "
+                 "실제로는 코드 회귀인데 UPSTREAM 으로 오분류됐다면 여기서 잡아 baseline 재부트스트랩)"
+                 if auto_promoted else "변경/손상 샘플 (baseline | new | diff)")
+        sections.append({"title": title, "items": items})
 
     # AI 가 고친 회귀의 '수정 전' 카드 — 사람이 무엇이 깨졌었는지 눈으로 확인할 수 있어야 한다.
     pre_items = []
