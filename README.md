@@ -88,12 +88,18 @@ hub 에서 실행할 때(수동 실행 또는 API `params`) 아래 인자를 줄
 | `FORCE_ACCEPT=1` | 게이트 RED 를 1회성 수동 승인하고 릴리스 진행 — **사람이 side-by-side 이미지를 직접 확인한 뒤에만** 사용 (의도된 렌더 변화일 때) |
 | `SKIP_IDEMPOTENCY=1` | (리허설 전용, DRY_RUN 과 함께) 멱등 가드 우회해 버전 계산/CHANGELOG 경로 연습 |
 
-### 게이트 RED 가 떴는데 의도된 변화라면?
+### 게이트 RED 의 원인 분류 — 자동 처리
 
-run 페이지의 side-by-side 이미지를 확인한 뒤, 정말 문제 없으면 hub 에이전트 디렉토리에서:
+게이트 RED(임계 초과)는 triage 로 원인을 가른다. **손상 샘플이 하나라도 CODE 면 전체를 CODE 로 처리**한다(any_code):
+
+- **CODE** (우리 렌더러가 잘못 그림) → Claude 가 `src/` 를 고쳐 다시 GREEN 으로 만든다. 못 고치면 리포트만 남기고 릴리스 차단.
+- **UPSTREAM** (모든 손상 샘플이 플랫폼 렌더링 변화 — 레이아웃·콘텐츠 온전) → **사람 승인 없이 이번 렌더를 새 골든으로 자동 승격 + 릴리스**한다(정책 2026-07-23). 무엇을 자동 승격했는지는 리포트에 감사 기록으로 남는다.
+  - ⚠️ 트레이드오프: UPSTREAM 판정은 비전 LLM 이라, 미세한 코드 회귀를 UPSTREAM 으로 오분류하면 깨진 렌더가 기준선이 되어 이후 '깨짐 vs 깨짐 → diff 0 → GREEN' 으로 자기은폐된다. 결정적 백스톱 + '불명 → CODE' 보수 기본값이 완화하지만 0 은 아니다. 리포트의 자동 승격 목록을 주기적으로 감사하고, 의심되면 baseline 을 재부트스트랩(bootstrap.sh)하라.
+
+수동 오버라이드가 필요하면(예: CODE 로 분류돼 차단됐지만 사람이 의도된 변화라 판단) side-by-side 이미지를 확인한 뒤:
 
 ```bash
-FORCE_ACCEPT=1 bash automation/run.sh   # 판정 기록은 리포트에 남긴 채 릴리스 진행
+FORCE_ACCEPT=<dali-ui-tag> bash automation/run.sh   # 해당 타깃 1회 수동 승인 후 릴리스
 ```
 
 릴리스 성공 시 새 렌더가 baseline 이 되므로 같은 변화로 다시 RED 가 뜨지 않는다.

@@ -491,10 +491,14 @@ t "visual 오라클: 전수 재렌더 포함" grep -q 'render.sh' "$TESTWS/retry
 t "visual 오라클: baseline 재비교 포함" grep -q 'compare.sh' "$TESTWS/retry_check.txt"
 t "visual 오라클: 비전 재판정 GREEN 요구" grep -q 'judge.sh' "$TESTWS/retry_check.txt"
 t "visual 오라클: GREEN 아니면 실패" grep -q 'GREEN' "$TESTWS/retry_check.txt"
-# 9i) run.sh 라우팅: RED → triage → CODE 는 AI 수정, UPSTREAM 은 사람 승인
+# 9i) run.sh 라우팅: RED → triage → CODE 는 AI 수정, UPSTREAM(코드버그 없음)은 자동 골든 승격
+#     (정책 2026-07-23: UPSTREAM 은 사람 승인 없이 이번 렌더를 새 골든으로 자동 승격+릴리스.
+#      triage 는 손상 샘플이 하나라도 CODE 면 CODE 를 출력하므로 mixed 런은 자동승격되지 않는다.)
 t "run.sh: RED 시 triage 호출" grep -q 'automation/triage.sh' "$ROOT/automation/run.sh"
 t "run.sh: CODE → fix.sh visual" grep -q 'fix.sh" visual' "$ROOT/automation/run.sh"
-t "run.sh: UPSTREAM → 골든 갱신 승인 필요로 차단" grep -q '골든 갱신 승인 필요' "$ROOT/automation/run.sh"
+t "run.sh: UPSTREAM → 사람 승인 없이 자동 골든 승격" grep -q 'AUTO_GOLDEN_UPSTREAM=1' "$ROOT/automation/run.sh"
+t "run.sh: UPSTREAM → '승인 필요' 로 차단하지 않는다(옛 동작 제거)" bash -c "! grep -q '골든 갱신 승인 필요' '$ROOT/automation/run.sh'"
+t "run.sh: 자동 승격 대상을 리포트에 감사 기록" grep -q '자동 골든 승격' "$ROOT/automation/run.sh"
 # 9j) 증거 조립: CODE 샘플만 프롬프트에 실린다 (정상 동작을 고치려 들지 않도록)
 EV=$(python3 -c "
 import sys; sys.path.insert(0, '$ROOT/tools')

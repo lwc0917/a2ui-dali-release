@@ -99,6 +99,7 @@ bash "$ROOT/automation/compare.sh" "$WORKSPACE/baseline" "$RUNDIR/new" "$RUNDIR/
 # ── [judge] ── (judge 의 진행 로그는 stderr 로 그대로, 마지막 줄만 판정)
 GATE=$(bash "$ROOT/automation/judge.sh" "$RUNDIR/compare" | tee /dev/stderr | tail -1)
 GATE_OVERRIDE=0
+AUTO_GOLDEN_UPSTREAM=0   # 업스트림 렌더링 변화를 사람 승인 없이 자동 골든 승격했는지(감사용)
 if [ "$GATE" != "GREEN" ]; then
   # FORCE_ACCEPT 오버라이드: RED 를 사람이 side-by-side 이미지로 확인하고 의도된 변화로
   # 승인했을 때만. 값이 '현재 dali-ui 타깃 태그와 정확히 일치'해야 1회 적용된다(target-bound)
@@ -133,9 +134,19 @@ if [ "$GATE" != "GREEN" ]; then
         fail gate-damage "시각 게이트 RED — 코드 수정 시도했으나 미해결 (리포트의 원인 분류/시도 내역 참조)"
       fi
     else
-      # 업스트림 렌더링 변화로 분류 → 코드를 뜯어고칠 일이 아니다. 사람이 side-by-side 를
-      # 보고 골든 갱신을 승인하면 force_accept 재실행으로 릴리스된다.
-      fail gate-damage "시각 게이트 RED — 업스트림 렌더링 변화로 분류, 골든 갱신 승인 필요 (리포트 참조)"
+      # 업스트림 렌더링 변화로 분류 — 모든 손상 샘플이 UPSTREAM 이다(코드 버그가 하나라도 있으면
+      # triage 가 CODE 를 출력해 위 fix 경로를 탄다; any_code). 정책(2026-07-23, 사용자 결정):
+      # 이 경우 사람 승인 없이 이번 렌더를 새 골든으로 '자동 승격' 하고 릴리스한다.
+      # ⚠️ 리스크: triage(비전 판정)가 미세한 코드 회귀를 UPSTREAM 으로 오분류하면 깨진 렌더가
+      #   기준선이 되어 이후 '깨짐 vs 깨짐 → diff 0 → GREEN' 으로 자기은폐된다. 결정적 백스톱과
+      #   '불명 → CODE' 보수 기본값이 이를 완화하지만 0 은 아니다. 그래서 무엇을 자동 승격했는지
+      #   리포트에 명시해, 사람이 사후에 감사하고 필요하면 baseline 을 재부트스트랩할 수 있게 한다.
+      GATE_OVERRIDE=1
+      AUTO_GOLDEN_UPSTREAM=1
+      AUTO_UP_NAMES=$(python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+print(", ".join(e["name"] for e in d if e.get("class")=="UPSTREAM"))' "$RUNDIR/compare/triage.json" 2>/dev/null || echo "")
+      ui_warn "⚠️ 시각 게이트 RED → 업스트림 렌더링 변화로 분류 — 사람 승인 없이 자동 골든 승격 + 릴리스 (정책). 자동 승격 대상: ${AUTO_UP_NAMES:-?}"
     fi
   fi
 else
@@ -168,7 +179,11 @@ case "$REL_STATUS" in
 released)
   rotate_baseline "$NEW_VER"
   bash "$ROOT/automation/release_check.sh" --done "$DALI_UI_TAG"
-  if [ "$GATE_OVERRIDE" = "1" ]; then
+  if [ "$AUTO_GOLDEN_UPSTREAM" = "1" ]; then
+    REL_NOTE="v$NEW_VER released — 업스트림 렌더링 변화를 사람 승인 없이 자동 골든 승격(${AUTO_UP_NAMES:-?}). 코드 회귀 오분류 대비 감사 필요 — 의심되면 baseline 재부트스트랩."
+    bash "$ROOT/automation/report.sh" success "$REL_NOTE"
+    ui_warn "[run] 완료 — $REL_NOTE"
+  elif [ "$GATE_OVERRIDE" = "1" ]; then
     REL_NOTE="v$NEW_VER released — ⚠️ 게이트 RED 를 FORCE_ACCEPT 로 수동 승인(손상 판정을 무시하고 릴리스)"
     bash "$ROOT/automation/report.sh" success "$REL_NOTE"
     ui_warn "[run] 완료 — $REL_NOTE"
