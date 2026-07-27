@@ -30,7 +30,10 @@ req "python3 + Pillow(픽셀 비교)" \
     "baseline 대비 픽셀 비교 불가 → 게이트 없음"
 req "claude CLI" "$(have claude)" \
     "시각 판정이 fail-closed 로 DAMAGED 처리되어 릴리스가 항상 차단된다(코드 적응도 불가)"
-opt "설치된 폰트" "$(fc-list 2>/dev/null | grep -q . && echo 0 || echo 1)" \
+# NOTE: 파이프 금지 — `fc-list | grep -q .` 는 grep 이 첫 줄에서 즉시 끝내며 fc-list 가
+# SIGPIPE(141) 로 죽고, 이 스크립트의 `set -o pipefail` 이 그 141 을 파이프라인 상태로
+# 올려 "폰트 없음" 오보가 된다(폰트가 많을수록 100% 재현). 출력을 그냥 담아서 판정한다.
+opt "설치된 폰트" "$([ -n "$(fc-list 2>/dev/null)" ] && echo 0 || echo 1)" \
     "텍스트가 비어 렌더될 수 있다 (apt: fonts-dejavu)"
 opt "릴리스 리모트 접근($A2UI_GIT_REMOTE)" \
     "$(timeout 20 git ls-remote "$A2UI_GIT_REMOTE" HEAD >/dev/null 2>&1 && echo 0 || echo 1)" \
