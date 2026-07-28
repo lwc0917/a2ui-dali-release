@@ -32,9 +32,21 @@ fi
 : "${GIT_RELEASE_EMAIL:=lwcc0917@gmail.com}"
 
 # ── 업스트림 소스 (읽기 전용 소비 — 절대 수정/push 안 함) ────────
+# core/adaptor 는 tizen gerrit 을 1순위로 쓴다. github 의 두 레포는 통째로 클론하기엔 커서
+# (사내 프록시 경유 시 실측 0/2 성공 — curl 92 HTTP/2 PROTOCOL_ERROR / HTTP 400, http.version
+# 을 바꿔도 동일. --depth 1 처럼 작은 전송만 통과했다) 사내에서 스택 빌드가 시작조차 못 했다.
+# gerrit 은 git:// (raw TCP 9418) 라 HTTP 프록시를 아예 타지 않는다 — 실측 full clone
+# dali-core 4.9s / dali-adaptor 5.8s, 필요한 dali_2.5.x 태그 전부 존재.
+# 그래도 git:// 이 막힌 망이 있을 수 있어 github 을 폴백으로 남긴다(둘 중 되는 쪽으로 진행).
+: "${DALI_CORE_REPO:=git://review.tizen.org/git/platform/core/uifw/dali-core}"
+: "${DALI_CORE_REPO_FALLBACK:=https://github.com/dalihub/dali-core.git}"
+: "${DALI_ADAPTOR_REPO:=git://review.tizen.org/git/platform/core/uifw/dali-adaptor}"
+: "${DALI_ADAPTOR_REPO_FALLBACK:=https://github.com/dalihub/dali-adaptor.git}"
+# dali-ui 는 github 을 유지한다 — gerrit 쪽 dali-ui 는 태그 체계가 날짜식(20260727.033403)이라
+# 이 에이전트의 페어링 규칙(vA.B.C.* ↔ dali_A.B.(C+1))이 성립하지 않는다. 릴리스 감지의
+# 기준 레포라 태그 체계가 곧 계약이다. 게다가 작아서(62MB) 프록시로도 문제없이 클론된다.
 : "${DALI_UI_REPO:=https://github.com/dalihub/dali-ui.git}"
-: "${DALI_CORE_REPO:=https://github.com/dalihub/dali-core.git}"
-: "${DALI_ADAPTOR_REPO:=https://github.com/dalihub/dali-adaptor.git}"
+: "${DALI_UI_REPO_FALLBACK:=}"
 
 # ── 게이트 (데스크톱 prev vs new 회귀 — web-parity 판정 아님) ────
 : "${RENDER_W:=480}"

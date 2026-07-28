@@ -16,9 +16,18 @@ have() { command -v "$1" >/dev/null 2>&1 && echo 0 || echo 1; }
 
 ui_step "[preflight] 실행 환경 점검"
 req "git" "$(have git)" "dali-core/adaptor/ui·a2ui 소스를 가져올 수 없다"
-req "네트워크(github.com 도달)" \
+req "네트워크(dali-ui 레포 도달)" \
     "$(timeout 20 git ls-remote "$DALI_UI_REPO" HEAD >/dev/null 2>&1 && echo 0 || echo 1)" \
     "새 dali-ui 태그 감지 및 스택 소스 취득 불가"
+# core/adaptor 는 dali-ui 와 다른 호스트/프로토콜(gerrit git://)이라 따로 확인한다 — 한쪽만
+# 되는 망이 실재한다(사내: github 대형 클론 불가 / 일부 망: git:// 차단). 폴백이 있으면
+# 한쪽만 살아도 진행되므로, 둘 다 죽었을 때만 필수 실패로 본다.
+req "네트워크(dali-core 소스 도달: 1순위 또는 폴백)" \
+    "$( { timeout 20 git ls-remote "$DALI_CORE_REPO" HEAD >/dev/null 2>&1 \
+         || { [ -n "${DALI_CORE_REPO_FALLBACK:-}" ] \
+              && timeout 20 git ls-remote "$DALI_CORE_REPO_FALLBACK" HEAD >/dev/null 2>&1; }; } \
+       && echo 0 || echo 1)" \
+    "격리 DALi 스택 소스를 가져올 수 없어 빌드가 시작조차 못 한다"
 req "빌드 도구(cmake/g++/make)" \
     "$([ "$(have cmake)" = 0 ] && [ "$(have g++)" = 0 ] && [ "$(have make)" = 0 ] && echo 0 || echo 1)" \
     "격리 DALi 스택과 a2ui 렌더러를 빌드할 수 없다"

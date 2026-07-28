@@ -33,18 +33,27 @@ export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgco
 export DALI_MULTI_SAMPLING_LEVEL=4
 EOF
 
-clone_or_fetch() { # $1=url $2=dir — 손상/부분 클론은 재클론으로 자가복구(무인 운영)
-  if [ -d "$2/.git" ]; then
-    if git -C "$2" rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      git -C "$2" remote set-url origin "$1" # .env 의 repo URL 변경이 기존 클론에도 반영되게
-      net_retry git -C "$2" fetch --tags --force origin && return 0
-      ui_warn "$(basename "$2"): fetch 실패 — 재클론으로 자가복구"
+clone_or_fetch() { # $1=url $2=dir [$3=fallback url] — 손상/부분 클론은 재클론으로 자가복구(무인 운영)
+  local url=$1 dir=$2 fallback=${3:-} name
+  name=$(basename "$dir")
+  if [ -d "$dir/.git" ]; then
+    if git -C "$dir" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+      git -C "$dir" remote set-url origin "$url" # .env 의 repo URL 변경이 기존 클론에도 반영되게
+      net_retry git -C "$dir" fetch --tags --force origin && return 0
+      ui_warn "$name: fetch 실패 — 재클론으로 자가복구"
     else
-      ui_warn "$(basename "$2"): 손상/부분 클론 감지(HEAD 없음) — 재클론"
+      ui_warn "$name: 손상/부분 클론 감지(HEAD 없음) — 재클론"
     fi
-    rm -rf "$2"
+    rm -rf "$dir"
   fi
-  net_retry git clone "$1" "$2"
+  net_retry git clone "$url" "$dir" && return 0
+  # 미러 폴백: 1순위가 망에서 막히는 경우가 실재한다(사내 프록시 = github 대형 클론 불가,
+  # 다른 망 = git:// 차단 가능). 어느 한쪽이 되면 실행을 계속한다 — 클론 실패 하나로
+  # 주간 무인 실행이 통째로 죽지 않게.
+  [ -n "$fallback" ] || return 1
+  ui_warn "$name: 1순위($url) 실패 — 폴백 미러로 재시도: $fallback"
+  rm -rf "$dir"
+  net_retry git clone "$fallback" "$dir"
 }
 
 build_one() { # $1=dir $2=tag
@@ -61,9 +70,12 @@ build_one() { # $1=dir $2=tag
   ui_ok "$name 설치 완료"
 }
 
-clone_or_fetch "$DALI_CORE_REPO" "$SRC/dali-core"       || { ui_err "dali-core clone/fetch 실패"; exit 1; }
-clone_or_fetch "$DALI_ADAPTOR_REPO" "$SRC/dali-adaptor" || { ui_err "dali-adaptor clone/fetch 실패"; exit 1; }
-clone_or_fetch "$DALI_UI_REPO" "$SRC/dali-ui"           || { ui_err "dali-ui clone/fetch 실패"; exit 1; }
+clone_or_fetch "$DALI_CORE_REPO" "$SRC/dali-core" "${DALI_CORE_REPO_FALLBACK:-}" \
+  || { ui_err "dali-core clone/fetch 실패"; exit 1; }
+clone_or_fetch "$DALI_ADAPTOR_REPO" "$SRC/dali-adaptor" "${DALI_ADAPTOR_REPO_FALLBACK:-}" \
+  || { ui_err "dali-adaptor clone/fetch 실패"; exit 1; }
+clone_or_fetch "$DALI_UI_REPO" "$SRC/dali-ui" "${DALI_UI_REPO_FALLBACK:-}" \
+  || { ui_err "dali-ui clone/fetch 실패"; exit 1; }
 
 build_one "$SRC/dali-core" "$CORE_TAG"    || exit 1
 build_one "$SRC/dali-adaptor" "$CORE_TAG" || exit 1
