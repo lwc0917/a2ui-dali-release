@@ -37,10 +37,55 @@ _core_adaptor_common_tags() {
   comm -12 <(sort -u <<<"$core") <(sort -u <<<"$adaptor")
 }
 
+# ── 비호환 조합 캐시 ($WORKSPACE/incompatible.json) ────────────────────────────
+# 업스트림 세 레포(core/adaptor/ui)의 태그가 항상 정합하지는 않는다. 실측 2026-07-28,
+# dali-ui v2.5.31.10949 는 '어떤 단일 태그로도' 빌드되지 않는다:
+#   · core   는 dali_2.5.32 이상이어야 한다 — DevelActor::SetResizePolicy 가 2.5.32 에서 추가
+#   · adaptor 는 dali_2.5.31 이하여야 한다 — VideoPlayerPlugin::VideoControlPolicy 가 2.5.32 에서 삭제
+# 이 에이전트는 core/adaptor 에 같은 태그를 쓰므로 둘을 동시에 만족시킬 수 없다.
+# ledger 는 '릴리스 성공'만 기록하므로 이런 타깃은 매 주기 수십 분짜리 스택 빌드를 무한 재시도한다.
+# 그래서 실패를 '태그'가 아니라 '(dali-ui, core/adaptor) 조합' 단위로 기록한다 — 새 core 태그가
+# 나오면 조합이 달라져 자동으로 다시 시도되므로, 업스트림이 정합해지면 스스로 풀린다.
+incompatible_key() { echo "$1+$2"; } # $1=ui_tag $2=core_adaptor_tag
+
+incompatible_has() { # $1=ui_tag $2=core_adaptor_tag → 0 if cached
+  python3 - "$WORKSPACE/incompatible.json" "$(incompatible_key "$1" "$2")" <<'PY'
+import json, sys
+path, key = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+sys.exit(0 if key in set(data.get("pairs", [])) else 1)
+PY
+}
+
+incompatible_add() { # $1=ui_tag $2=core_adaptor_tag $3=reason
+  python3 - "$WORKSPACE/incompatible.json" "$(incompatible_key "$1" "$2")" "${3:-}" <<'PY'
+import json, sys
+path, key, reason = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+pairs = data.setdefault("pairs", [])
+if key not in pairs:
+    pairs.append(key)
+data.setdefault("reasons", {})[key] = reason
+with open(path, "w") as f:
+    json.dump(data, f, indent=1, ensure_ascii=False)
+PY
+}
+
 # 자동 경로용 타깃 선정: 최신순으로 훑으며
 #  - ledger 에 있는 태그를 만나면 중단(그보다 오래된 건 이미 지난 상태) → 후보 없음
 #  - 정확한 페어(dali_A.B.(C+1))가 core/adaptor 양쪽에 있으면 그 태그가 타깃
 #  - 페어가 아직 없으면(예: dali-ui 2.5.30 인데 core 2.5.31 미태그) 스킵하고 다음 태그
+#  - 그 조합이 이미 '비호환'으로 기록돼 있으면 더 옛 태그로 내려가지 않고 대기(no-op).
+#    옛 태그는 어차피 릴리스 가치가 없고, 내려갈수록 실패할 스택 빌드만 더 태운다.
+#    업스트림에 새 core/adaptor 태그가 나오면 조합이 바뀌어 자동으로 다시 시도된다.
 # 출력: "UI_TAG PAIR_TAG" / 후보 없음 → 비-0 (스킵 사유는 stderr)
 select_processable_target() {
   local common tag want
@@ -53,6 +98,10 @@ select_processable_target() {
     fi
     want=$(exact_pair_name "$tag") || continue
     if grep -qx "$want" <<<"$common"; then
+      if incompatible_has "$tag" "$want"; then
+        echo "select: $tag + $want 은 빌드 비호환으로 기록됨 — 새 core/adaptor 태그까지 대기" >&2
+        return 1
+      fi
       echo "$tag $want"
       return 0
     fi

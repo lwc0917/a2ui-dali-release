@@ -28,6 +28,10 @@ inputs:
     type: bool
     default: false
     description: "리허설 — 게이트까지 전부 수행하되 커밋/태그/push/baseline/ledger 는 변경하지 않음"
+  - name: force_target
+    type: string
+    required: false
+    description: "특정 dali-ui 태그를 강제로 재처리 (예: v2.5.28.10837) — ledger/비호환 기록을 무시한다. 업스트림 태그 비호환으로 대기 중일 때 사람이 다른 타깃으로 복구 실행하거나, 파이프라인을 리허설할 때 사용. 비우면 평소대로 최신 미처리 태그를 자동 선정."
   - name: force_accept
     type: string
     required: false
@@ -42,6 +46,8 @@ runner:
     DIFF_THRESHOLD_INPUT: "${input.diff_threshold}"
     DRY_RUN_INPUT: "${input.dry_run}"
     FORCE_ACCEPT_INPUT: "${input.force_accept}"
+    # 빈 문자열 = 미지정 = load_env 의 기본값과 동일 의미라 _INPUT 우회 변수가 필요 없다.
+    FORCE_TARGET: "${input.force_target}"
   # dali-core/adaptor/ui 3종 풀빌드 + 36종 렌더 + Claude 적응 루프 → 여유 있게 3시간.
   timeout_seconds: 10800
   logs:

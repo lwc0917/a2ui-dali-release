@@ -1,6 +1,6 @@
 #!/bin/bash
 # report.sh <outcome> [detail] — 리포트 + artifacts 생성 (no-op 외 모든 경로가 경유).
-# outcome: success|dry-run|skipped|bootstrap|no-op|gate-damage|build-break|conformance|render|infra|release-push
+# outcome: success|dry-run|skipped|bootstrap|no-op|gate-damage|build-break|conformance|render|infra|release-push|upstream-mismatch
 # 실패 outcome 이면 Claude 진단(Read 전용, best-effort)을 리포트에 포함.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

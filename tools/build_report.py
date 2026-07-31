@@ -25,6 +25,9 @@ TITLES = {
     "render":       ("a2ui-dali 자동 릴리스 — 렌더 실패 ⛔", 1),
     "infra":        ("a2ui-dali 자동 릴리스 — 인프라 오류 ⛔", 1),
     "release-push": ("a2ui-dali 자동 릴리스 — push 실패 ⛔", 1),
+    # 우리 코드 문제가 아니라 업스트림 태그끼리 안 맞는 경우 — 사람이 고칠 게 없고
+    # 새 core/adaptor 태그를 기다리면 된다는 걸 제목에서 바로 구분되게 한다.
+    "upstream-mismatch": ("a2ui-dali 자동 릴리스 — 업스트림 태그 비호환 ⏸", 1),
     "llm-unavailable": ("a2ui-dali 자동 릴리스 — LLM 호출 불가로 중단 ⏸", 1),
 }
 

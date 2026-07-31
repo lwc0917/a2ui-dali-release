@@ -7,6 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/automation/lib/load_env.sh"
 source "$ROOT/automation/lib/ui.sh"
+source "$ROOT/automation/lib/dali.sh" # incompatible_add (스택 빌드 비호환 기록)
 
 RUN_ID="${AGENTHUB_RUN_ID:-local-$(date +%Y%m%d-%H%M%S)-$$}"
 export RUNDIR="$WORKSPACE/runs/$RUN_ID"
@@ -70,8 +71,19 @@ if [ ! -f "$WORKSPACE/baseline/meta.json" ]; then
 fi
 
 # ── [stack] ──
-bash "$ROOT/automation/build_stack.sh" "$CORE_ADAPTOR_TAG" "$DALI_UI_TAG" \
-  || fail infra "격리 DALi 스택 빌드 실패 ($CORE_ADAPTOR_TAG + $DALI_UI_TAG)"
+# 컴파일 에러로 실패하면 그 (dali-ui, core/adaptor) 조합을 '비호환'으로 기록한다. 업스트림
+# 세 레포의 태그가 어긋나 어떤 단일 태그로도 빌드되지 않는 dali-ui 태그가 실재하기 때문이다
+# (실측 2026-07-28 v2.5.31.10949 — 근거는 lib/dali.sh 의 비호환 캐시 주석). 기록해 두지 않으면
+# 매 주기 수십 분짜리 스택 빌드를 무한 재시도한다. 인프라성 실패(네트워크/디스크)는 기록하지
+# 않는다 — 다음 주기에 그냥 성공할 수 있으므로 영구 스킵하면 안 된다.
+if ! bash "$ROOT/automation/build_stack.sh" "$CORE_ADAPTOR_TAG" "$DALI_UI_TAG"; then
+  if grep -q "error:" "$RUNDIR/stack_build.log" 2>/dev/null; then
+    incompatible_add "$DALI_UI_TAG" "$CORE_ADAPTOR_TAG" "stack build compile error"
+    ui_warn "[stack] $DALI_UI_TAG + $CORE_ADAPTOR_TAG 을 비호환으로 기록 — 새 core/adaptor 태그가 나올 때까지 재시도하지 않는다"
+    fail upstream-mismatch "업스트림 태그 비호환 — $DALI_UI_TAG 는 $CORE_ADAPTOR_TAG 로 컴파일되지 않는다"
+  fi
+  fail infra "격리 DALi 스택 빌드 실패 ($CORE_ADAPTOR_TAG + $DALI_UI_TAG)"
+fi
 
 # ── [a2ui build] (+Claude 적응 루프) ──
 bash "$ROOT/automation/build_a2ui.sh" checkout main || fail infra "a2ui-dali 소스 준비 실패"
@@ -170,6 +182,10 @@ json.dump({"dali_ui": sys.argv[2], "core_adaptor": sys.argv[3], "a2ui_version": 
           open(sys.argv[1], "w"), indent=1)
 ' "$WORKSPACE/baseline/meta.json" "$DALI_UI_TAG" "$CORE_ADAPTOR_TAG" "$new_ver"
   ui_ok "baseline 회전 → $DALI_UI_TAG 기준"
+  # 골든을 레포에 올려 백업 + 변천사 감사를 남긴다(workspace/ 는 gitignored 라 이 머신에만
+  # 있었다). 실패해도 릴리스는 이미 끝났으므로 경고만 하고 실행을 죽이지 않는다.
+  bash "$ROOT/automation/golden_publish.sh" "${2:-golden rotation}" \
+    || ui_warn "[golden] 게시 실패 — 골든은 로컬에만 갱신됨 (다음 회전에서 재시도)"
 }
 
 NEW_VER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("new_version","?"))' \
@@ -177,7 +193,13 @@ NEW_VER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("n
 
 case "$REL_STATUS" in
 released)
-  rotate_baseline "$NEW_VER"
+  # 자동 골든 승격이었는지 커밋 메시지에 남긴다 — 사람 승인 없이 기준선이 바뀐 건이라
+  # 나중에 git log 로 골라내 감사할 수 있어야 한다.
+  if [ "$AUTO_GOLDEN_UPSTREAM" = "1" ]; then
+    rotate_baseline "$NEW_VER" "v$NEW_VER — UPSTREAM 자동 승격(사람 승인 없음): ${AUTO_UP_NAMES:-?}"
+  else
+    rotate_baseline "$NEW_VER" "v$NEW_VER release"
+  fi
   bash "$ROOT/automation/release_check.sh" --done "$DALI_UI_TAG"
   if [ "$AUTO_GOLDEN_UPSTREAM" = "1" ]; then
     REL_NOTE="v$NEW_VER released — 업스트림 렌더링 변화를 사람 승인 없이 자동 골든 승격(${AUTO_UP_NAMES:-?}). 코드 회귀 오분류 대비 감사 필요 — 의심되면 baseline 재부트스트랩."
@@ -196,7 +218,7 @@ skipped)
   if [ "$DRY_RUN" = "1" ]; then
     ui_ok "[run] 완료 — 멱등 생략 (DRY_RUN: baseline/ledger 미변경)"
   else
-    rotate_baseline "$NEW_VER"
+    rotate_baseline "$NEW_VER" "v$NEW_VER — 멱등 생략 경로(이미 릴리스됨)"
     bash "$ROOT/automation/release_check.sh" --done "$DALI_UI_TAG"
     ui_ok "[run] 완료 — 멱등 생략 (이미 릴리스됨)"
   fi
