@@ -16,11 +16,29 @@ source "$ROOT/automation/lib/claude.sh"
 # shellcheck disable=SC1091
 source "$ROOT/automation/lib/dali_headers.sh"
 
-FIX_ALLOWED_RE='^src/'
+# 허용: 렌더러 소스 + '게이트가 아닌' 테스트 소스(test/ 최상위 .cpp).
+FIX_ALLOWED_RE='^(src/|test/[^/]*\.cpp$)'
 
-# 허용 범위 밖에서 변경/추가된 파일 목록을 stdout 으로 (없으면 빈 출력)
+# 거부(허용보다 우선). test/ 를 통째로 막았더니 업스트림 API 개편이 test/ 를 건드리는 순간
+# 빌드가 '영구 미수정' 상태가 됐다 — 실측 2026-07-28: dali-ui 의 GetChildViewCount/GetChildViewAt
+# → GetChildCount/GetChildAt 개편에서 Claude 가 src/ 는 다 적응시켜 98% 까지 갔는데
+# test/streaming-render-test.cpp 를 못 고쳐 fix 예산(3회)을 모두 소진하고 실패했다.
+# 반대로 test/ 를 전부 열면 Claude 가 '게이트를 고쳐' 통과할 수 있다. 그래서 게이트만 막는다:
+#   · test/conformance-test.cpp = conformance 게이트 본체
+#   · test/*.jsonl              = 게이트 기대값 데이터 (conformance.sh 가 test/ 를 읽는다)
+#   · test/e2e/**               = e2e 픽스처
+# a2ui-streaming-render-test 는 별도 실행파일이고 conformance.sh 가 쓰지 않으므로 게이트가 아니다.
+FIX_DENIED_RE='^test/(conformance-test\.cpp$|e2e/|[^/]*\.jsonl$)'
+
+# 허용 범위 밖 또는 명시적 거부 대상인 변경/추가 파일 목록을 stdout 으로 (없으면 빈 출력)
 fix_scope_violations() { # $1=repo dir
-  git -C "$1" status --porcelain | awk '{print $NF}' | grep -vE "$FIX_ALLOWED_RE" || true
+  local files
+  files=$(git -C "$1" status --porcelain | awk '{print $NF}')
+  [ -n "$files" ] || return 0
+  {
+    grep -vE "$FIX_ALLOWED_RE" <<<"$files" || true
+    grep -E "$FIX_DENIED_RE" <<<"$files" || true
+  } | grep -v '^$' | sort -u
 }
 
 # 범위 밖 변경 되돌리기 (tracked → checkout, untracked → 삭제)
@@ -167,10 +185,13 @@ diff 가 그대로라 재검증에서 반려됩니다."
     ERRTAIL=$(tail -n 150 "$LOG" 2>/dev/null || echo "(로그 없음)")
   fi
   PROMPT="a2ui-dali 렌더러가 새 dali-ui (${DALI_UI_TAG:-unknown}, core/adaptor ${CORE_ADAPTOR_TAG:-unknown}) 에 대해 실패했습니다.
-임무: src/ 아래 렌더러 소스만 수정해 $TASK 하세요.
+임무: src/ 아래 렌더러 소스를 수정해 $TASK 하세요.
 
 규칙 (위반 시 수정이 자동 폐기됩니다):
-- src/ 밖은 절대 수정 금지 — test/, examples/, CMakeLists.txt, packaging/, README, tools 등.
+- 수정 가능: src/ 아래 전체, 그리고 test/ 최상위의 .cpp 중 게이트가 아닌 것(예: test/streaming-render-test.cpp).
+  같은 API 개편이 그 테스트 소스도 깨뜨리면 빌드가 통째로 안 되므로 거기까지는 적응해도 된다.
+- 절대 수정 금지: test/conformance-test.cpp, test/ 의 .jsonl 기대값, test/e2e/, CMakeLists.txt, packaging/, README, tools, examples 등.
+  게이트 자체나 기대값을 고쳐 통과시키는 것은 적응이 아니라 부정이며 자동 폐기된다.
 - 렌더링 동작·공개 API 의미를 바꾸지 말 것. 테스트/기대값을 고치는 게 아니라 코드를 표준 방식으로 적응.
 - 존재가 불확실한 dali-ui 심볼을 지어내지 말 것. 설치된 실제 헤더를 Read/Grep 으로 확인 가능: $PREFIX/include/dali-ui-foundation/, $PREFIX/include/dali-ui-components/
 - 업스트림이 '무엇으로 바뀌었는지' 는 여기에 있다(없으면 '(없음)'): ${DELTA_HINT:-(없음)}
