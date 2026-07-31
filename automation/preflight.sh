@@ -34,9 +34,11 @@ req "빌드 도구(cmake/g++/make)" \
 req "렌더 도구(xvfb-run/ffmpeg/xwd)" \
     "$([ "$(have xvfb-run)" = 0 ] && [ "$(have ffmpeg)" = 0 ] && [ "$(have xwd)" = 0 ] && echo 0 || echo 1)" \
     "코퍼스를 렌더할 수 없어 시각 게이트 자체가 성립하지 않는다 (apt: xvfb ffmpeg x11-apps)"
-req "python3 + Pillow(픽셀 비교)" \
-    "$(python3 -c 'import PIL' 2>/dev/null && echo 0 || echo 1)" \
-    "baseline 대비 픽셀 비교 불가 → 게이트 없음"
+# Pillow 만 보면 부족하다 — compare.py 는 numpy 도 import 한다. numpy 만 없으면 preflight 가
+# 통과해 스택 빌드까지 수십 분을 태운 뒤 compare 에서 infra 실패로 죽는다(실측 2026-07-28).
+req "python3 + Pillow/numpy(픽셀 비교)" \
+    "$(python3 -c 'import PIL, numpy' 2>/dev/null && echo 0 || echo 1)" \
+    "baseline 대비 픽셀 비교 불가 → 게이트 없음 (apt: python3-numpy / pip: numpy)"
 req "claude CLI" "$(have claude)" \
     "시각 판정이 fail-closed 로 DAMAGED 처리되어 릴리스가 항상 차단된다(코드 적응도 불가)"
 # NOTE: 파이프 금지 — `fc-list | grep -q .` 는 grep 이 첫 줄에서 즉시 끝내며 fc-list 가

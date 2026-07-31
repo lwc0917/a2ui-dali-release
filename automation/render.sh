@@ -19,7 +19,10 @@ ui_step "[render] 코퍼스 ${RENDER_W}x${RENDER_H} 렌더 → $OUTDIR (log: $LO
 _missing=""
 for _t in xvfb-run ffmpeg xwd; do command -v "$_t" >/dev/null 2>&1 || _missing+=" $_t"; done
 [ -n "$_missing" ] && { ui_err "렌더 필수 도구 없음:$_missing (apt: xvfb ffmpeg x11-apps)"; exit 1; }
-if command -v fc-list >/dev/null 2>&1 && ! fc-list 2>/dev/null | grep -q .; then
+# NOTE: 파이프 금지 — preflight.sh 와 동일한 함정(4249190). `fc-list | grep -q .` 는 grep 이
+# 첫 줄에서 즉시 끝내며 fc-list 가 SIGPIPE(141) 로 죽고, 이 스크립트의 `set -o pipefail` 이
+# 그 141 을 파이프라인 상태로 올려 "폰트 없음" 오보가 된다(폰트가 많을수록 100% 재현).
+if command -v fc-list >/dev/null 2>&1 && [ -z "$(fc-list 2>/dev/null)" ]; then
   ui_warn "설치된 폰트를 찾지 못함 — 텍스트가 비어 보일 수 있음 (fonts-dejavu 권장)"
 fi
 # 에셋 부재는 하드 실패 — 에셋이 없어도 렌더는 "성공"으로 끝나고 이미지·아이콘·알파마스크만
