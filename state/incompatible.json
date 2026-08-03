@@ -1,0 +1,8 @@
+{
+ "pairs": [
+  "v2.5.31.10949+dali_2.5.32"
+ ],
+ "reasons": {
+  "v2.5.31.10949+dali_2.5.32": "stack build compile error"
+ }
+}

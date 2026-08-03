@@ -1,7 +1,7 @@
 apiVersion: agenthub/v1
 id: a2ui-dali-release
 name: a2ui-dali Release
-version: 1.1.0
+version: 1.2.0
 description: dali-ui 에 새 릴리스 태그가 생기면 격리 DALi 스택을 재빌드하고, a2ui-dali 렌더러를 빌드(깨지면 Claude 가 코드 적응) 후 갤러리 코퍼스 36종을 이전 릴리스 렌더와 비교. 심각한 시각 훼손이 없으면 github.com/dalihub/a2ui-dali 로 자동 릴리스(버전 범프+태그+push). 결과 리포트(이미지 포함)는 run 페이지에서 확인. 새 태그가 없으면 no-op.
 owner: uifw
 capabilities: [release-check, build, verify, release]
@@ -62,3 +62,18 @@ runner:
     content_type: "text/markdown"
   success:
     mode: exit_zero
+
+  # ── 후속 작업 (사람 승인) ───────────────────────────────────────────────────
+  actions:
+    # 에이전트 '자신의' 코드 릴리스. 마이그레이션 산출물(a2ui-dali)이 아니라 이 레포다.
+    # run.sh 는 끝에서 release_agent.sh --check 만 부른다(부작용 없음) — 매니페스트 버전이
+    # 아직 태그되지 않았고 워킹트리가 깨끗할 때만 마커를 찍으므로, 릴리스할 것이 없거나
+    # 커밋되지 않은 변경이 남아 있으면 이 버튼 자체가 뜨지 않는다.
+    - id: release-agent
+      label: "이 에이전트 코드를 릴리스 (태그 + 사내·사외 push + GitHub 릴리스)"
+      description: "agent.yaml 의 버전으로 태그를 만들고 origin(사내)·public(사외) 양쪽에 push 한 뒤 두 GitHub 에 릴리스를 만듭니다. 버튼 클릭 = 사람 승인이며, 한 단계라도 실패하면 실행이 비-0 으로 끝납니다(부분 성공도 실패로 보고)."
+      available_when: '\[agent-release-ready'
+      command:
+        - bash
+        - -lc
+        - 'set -euo pipefail; exec automation/release_agent.sh --confirmed'

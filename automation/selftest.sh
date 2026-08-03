@@ -753,6 +753,94 @@ t "30 의 로컬화 이미지가 vendored 됨" bash -c "ls '$ROOT/corpus/sample-
 t "render.sh 가 vendored 이미지를 res 로 복사" grep -q 'corpus/sample-images' "$ROOT/automation/render.sh"
 t "preflight 가 코퍼스 결정성 점검" grep -q 'check_corpus_assets' "$ROOT/automation/preflight.sh"
 
+ui_step "[selftest] 16) 자기 리포 게시 — allowlist · ahead/behind 가드 · 비호환 캐시 영속"
+# 실측 배경(2026-08-03): 비호환 캐시가 gitignored 인 workspace/ 에만 있어, 워크스페이스가
+# 사라지면 '이 조합은 빌드가 안 된다'는 학습이 통째로 날아가 수십 분짜리 스택 빌드를 다시
+# 태웠다. 이제 실행이 state/incompatible.json 을 레포에 커밋·push 한다. 위험한 건 '무엇을
+# 스테이징하느냐' 라서, 진짜 git 레포 + bare 리모트로 그 계약을 오프라인에서 못박는다.
+source "$ROOT/automation/lib/repo_publish.sh"
+
+RP="$TESTWS/rp"; mkdir -p "$RP/state"
+git init -q "$RP" && git -C "$RP" config user.email t@t && git -C "$RP" config user.name t
+echo seed > "$RP/seed.txt"; git -C "$RP" add -A && git -C "$RP" commit -q -m seed
+git init -q --bare "$TESTWS/rp-origin.git" && git -C "$RP" remote add origin "$TESTWS/rp-origin.git"
+git -C "$RP" push -q origin HEAD:refs/heads/$(git -C "$RP" rev-parse --abbrev-ref HEAD)
+
+# allowlist 밖의 dirty 파일은 절대 커밋되면 안 된다(실행이 남긴 산출물이 딸려 올라가는 사고).
+echo '{"pairs":["a+b"]}' > "$RP/state/incompatible.json"
+echo 'RUNTIME GARBAGE' > "$RP/leftover.png"
+( ROOT="$RP" AGENT_REPO_REMOTES="origin" DRY_RUN=0 repo_publish "chore(state): test" state/incompatible.json ) >/dev/null 2>&1
+t "게시: allowlist 파일이 커밋됨" bash -c "git -C '$RP' show --name-only --format= HEAD | grep -qx 'state/incompatible.json'"
+t "게시: allowlist 밖 파일은 커밋 안 됨" bash -c "! git -C '$RP' show --name-only --format= HEAD | grep -q 'leftover.png'"
+rp_in_sync() { git -C "$RP" fetch -q origin && [ "$(git -C "$RP" rev-list --count FETCH_HEAD..HEAD)" = "0" ]; }
+t "게시: 리모트에 반영됨" rp_in_sync
+t "게시: 변경 없으면 커밋 안 만든다(멱등)" bash -c "
+  before=\$(git -C '$RP' rev-parse HEAD)
+  ( ROOT='$RP' AGENT_REPO_REMOTES=origin DRY_RUN=0 repo_publish 'noop' state/incompatible.json ) >/dev/null 2>&1
+  [ \"\$before\" = \"\$(git -C '$RP' rev-parse HEAD)\" ]"
+t "게시: DRY_RUN 이면 커밋하지 않는다" bash -c "
+  echo '{\"pairs\":[\"a+b\",\"c+d\"]}' > '$RP/state/incompatible.json'
+  before=\$(git -C '$RP' rev-parse HEAD)
+  ( ROOT='$RP' AGENT_REPO_REMOTES=origin DRY_RUN=1 repo_publish 'dry' state/incompatible.json ) >/dev/null 2>&1
+  [ \"\$before\" = \"\$(git -C '$RP' rev-parse HEAD)\" ]"
+# 리모트가 앞서 있으면(남의 커밋) main 을 직접 밀지 않고 별도 브랜치로 올린다.
+rp_diverge_and_publish() {
+  # 다른 클론이 origin/main 을 먼저 밀어 리모트가 앞서게 만든다(= 남의 커밋).
+  git clone -q "$TESTWS/rp-origin.git" "$TESTWS/rp2" || return 1
+  git -C "$TESTWS/rp2" config user.email t@t; git -C "$TESTWS/rp2" config user.name t
+  echo other > "$TESTWS/rp2/other.txt"
+  git -C "$TESTWS/rp2" add -A && git -C "$TESTWS/rp2" commit -q -m other || return 1
+  git -C "$TESTWS/rp2" push -q origin HEAD || return 1
+  echo '{"pairs":["z+z"]}' > "$RP/state/incompatible.json"
+  ( ROOT="$RP" AGENT_REPO_REMOTES=origin DRY_RUN=0 REPO_PUBLISH_FALLBACK=state/update \
+      repo_publish "diverged" state/incompatible.json ) >/dev/null 2>&1
+  # main 은 남의 커밋 그대로여야 하고, 내 커밋은 폴백 브랜치로 나가 있어야 한다.
+  git -C "$RP" ls-remote --heads origin | grep -q 'refs/heads/state/update'
+}
+t "게시: 리모트가 앞서면 직접 push 하지 않고 브랜치로" rp_diverge_and_publish
+rp_main_untouched() {
+  git -C "$TESTWS/rp2" fetch -q origin && \
+    [ "$(git -C "$TESTWS/rp2" rev-parse HEAD)" = "$(git -C "$TESTWS/rp2" rev-parse origin/HEAD 2>/dev/null || git -C "$TESTWS/rp2" rev-parse origin/main)" ]
+}
+t "게시: 남의 커밋 위에 덮어쓰지 않았다" rp_main_untouched
+
+# 비호환 캐시가 레포 경로로 가고, 옛 워크스페이스 캐시는 한 번 이전된다.
+IWS="$TESTWS/iws"; mkdir -p "$IWS"
+printf '{"pairs":["old+pair"],"reasons":{"old+pair":"legacy"}}' > "$IWS/incompatible.json"
+t "비호환 캐시: 레포 경로에 기록된다" bash -c "
+  ( INCOMPAT_FILE='$TESTWS/state1/incompatible.json' WORKSPACE='$TESTWS/empty' \
+    bash -c 'source \"$ROOT/automation/lib/dali.sh\"; incompatible_add v1 t1 why' )
+  grep -q 'v1+t1' '$TESTWS/state1/incompatible.json'"
+t "비호환 캐시: 옛 워크스페이스 캐시를 이전한다" bash -c "
+  ( INCOMPAT_FILE='$TESTWS/state2/incompatible.json' WORKSPACE='$IWS' \
+    bash -c 'source \"$ROOT/automation/lib/dali.sh\"; incompatible_has old pair' )
+  grep -q 'old+pair' '$TESTWS/state2/incompatible.json'"
+
+ui_step "[selftest] 17) 에이전트 자기 릴리스 — 마커는 '릴리스할 것이 있고 트리가 깨끗할 때만'"
+RA="$TESTWS/ra"; mkdir -p "$RA/automation/lib"
+cp "$ROOT/automation/release_agent.sh" "$RA/automation/"
+cp "$ROOT/automation/lib/ui.sh" "$ROOT/automation/lib/load_env.sh" "$ROOT/automation/lib/repo_publish.sh" "$RA/automation/lib/"
+printf 'apiVersion: agenthub/v1\nid: x\nname: x\nversion: 9.9.9\n' > "$RA/agent.yaml"
+git init -q "$RA" && git -C "$RA" config user.email t@t && git -C "$RA" config user.name t
+git -C "$RA" add -A && git -C "$RA" commit -q -m init
+t "릴리스 마커: 미태그 + 깨끗한 트리 → 제안" bash -c "
+  WORKSPACE='$TESTWS/rws' bash '$RA/automation/release_agent.sh' --check 2>/dev/null | grep -q '\\[agent-release-ready: v9.9.9\\]'"
+t "릴리스 마커: 워킹트리가 더러우면 제안하지 않는다" bash -c "
+  echo dirt > '$RA/dirt.txt'
+  ! WORKSPACE='$TESTWS/rws' bash '$RA/automation/release_agent.sh' --check 2>/dev/null | grep -q 'agent-release-ready'"
+t "릴리스 마커: 이미 태그된 버전이면 제안하지 않는다" bash -c "
+  rm -f '$RA/dirt.txt'; git -C '$RA' tag -a v9.9.9 -m v9.9.9
+  ! WORKSPACE='$TESTWS/rws' bash '$RA/automation/release_agent.sh' --check 2>/dev/null | grep -q 'agent-release-ready'"
+t "릴리스 실행: 더러운 트리에서는 fail-closed(비-0)" bash -c "
+  echo dirt > '$RA/dirt.txt'
+  ! WORKSPACE='$TESTWS/rws' bash '$RA/automation/release_agent.sh' --confirmed >/dev/null 2>&1"
+run_sh_calls_check_only() {
+  grep -qE 'release_agent\.sh"? --check' "$ROOT/automation/run.sh" \
+    && ! grep -qE 'release_agent\.sh"? --confirmed' "$ROOT/automation/run.sh"
+}
+t "run.sh 는 --check 만 부른다(에이전트가 스스로 릴리스하지 않는다)" run_sh_calls_check_only
+t "매니페스트 액션이 --confirmed 를 부른다" grep -q 'release_agent.sh --confirmed' "$ROOT/agent.yaml"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"

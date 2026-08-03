@@ -16,6 +16,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/automation/lib/load_env.sh"
 source "$ROOT/automation/lib/ui.sh"
+source "$ROOT/automation/lib/repo_publish.sh"
 
 REASON="${1:-golden rotation}"
 GOLDEN_DIR="$ROOT/golden"
@@ -40,49 +41,13 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
-# ── 커밋 (golden/ 만 스테이징 — 다른 로컬 수정을 끼워 올리지 않는다) ──
-git -C "$ROOT" add -A golden || { ui_err "[golden] git add 실패"; exit 1; }
-if git -C "$ROOT" diff --cached --quiet -- golden; then
-  ui_ok "[golden] 변경 없음 — 커밋 불필요"
-  exit 0
-fi
-GIT_AUTHOR_NAME="$GIT_RELEASE_NAME" GIT_AUTHOR_EMAIL="$GIT_RELEASE_EMAIL" \
-  GIT_COMMITTER_NAME="$GIT_RELEASE_NAME" GIT_COMMITTER_EMAIL="$GIT_RELEASE_EMAIL" \
-  git -C "$ROOT" commit -q -m "golden: ${DALI_UI_TAG:-?} 기준으로 갱신 ($REASON)" -- golden \
-  || { ui_err "[golden] 커밋 실패 — 파일은 갱신됐지만 기록이 남지 않았다"; exit 1; }
-ui_ok "커밋: $(git -C "$ROOT" rev-parse --short HEAD)"
-
-# ── push: 사내(origin)·사외(public) 양쪽. thorvg 와 같은 안전장치 —
-#    내 커밋 1개만 앞서 있을 때만 직접 push, 아니면 별도 브랜치로 올려 사람이 머지. ──
-BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-[ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ] || { ui_warn "[golden] detached HEAD — push 생략(커밋은 로컬에 있다)"; exit 0; }
-FALLBACK="a2ui-golden/update"
-ok=""; bad=""
-for remote in ${GOLDEN_REMOTES:-origin public}; do
-  git -C "$ROOT" remote get-url "$remote" >/dev/null 2>&1 || { ui_info "리모트 '$remote' 없음 — 건너뜀"; continue; }
-  if ! git -C "$ROOT" fetch -q "$remote" "$BRANCH" 2>/dev/null; then
-    ui_warn "fetch 실패($remote) — 건너뜀(커밋은 로컬에 있다)"; bad="$bad $remote"; continue
-  fi
-  ahead="$(git -C "$ROOT" rev-list --count FETCH_HEAD..HEAD 2>/dev/null || echo 0)"
-  behind="$(git -C "$ROOT" rev-list --count HEAD..FETCH_HEAD 2>/dev/null || echo 0)"
-  if [ "$ahead" = "0" ]; then
-    ui_info "$remote/$BRANCH 에 이미 반영됨"; ok="$ok $remote"; continue
-  fi
-  if [ "$behind" != "0" ] || [ "$ahead" != "1" ]; then
-    ui_warn "직접 push 보류($remote/$BRANCH: ahead=$ahead behind=$behind) — 골든 커밋만 브랜치로 올린다"
-    if git -C "$ROOT" push -q "$remote" "HEAD:refs/heads/$FALLBACK" 2>/dev/null; then
-      ui_ok "push: $remote/$FALLBACK — PR 로 머지하세요"; ok="$ok $remote($FALLBACK)"
-    else
-      ui_warn "push 실패($remote/$FALLBACK) — 커밋은 로컬에 남아있다"; bad="$bad $remote"
-    fi
-    continue
-  fi
-  if git -C "$ROOT" push -q "$remote" "$BRANCH" 2>/dev/null; then
-    ui_ok "push: $remote/$BRANCH"; ok="$ok $remote"
-  else
-    ui_warn "push 실패($remote/$BRANCH) — 커밋은 로컬에 남아있다"; bad="$bad $remote"
-  fi
-done
-[ -n "$bad" ] && ui_warn "[golden] 반영 실패 리모트:$bad (다음 회전에서 재시도된다)"
-ui_ok "[golden] 완료 — 반영:${ok:- 없음}"
+# ── 커밋 + push: 공통 헬퍼(automation/lib/repo_publish.sh)가 allowlist 스테이징·
+#    ahead/behind 가드·프록시 우회 폴백을 한 곳에서 담당한다. 예전엔 이 블록이 여기에
+#    통째로 복붙돼 있었고, 그래서 프록시 우회 같은 개선이 이 스크립트에만 적용됐다. ──
+REPO_PUBLISH_FALLBACK="a2ui-golden/update" \
+AGENT_REPO_REMOTES="${GOLDEN_REMOTES:-origin public}" \
+  repo_publish "golden: ${DALI_UI_TAG:-?} 기준으로 갱신 ($REASON)" golden
+rc=$?
+[ "$rc" = "0" ] || ui_warn "[golden] 일부 리모트에 반영하지 못했다 — 커밋은 로컬에 있다"
+ui_ok "[golden] 완료"
 exit 0

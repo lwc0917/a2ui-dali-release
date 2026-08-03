@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/automation/lib/load_env.sh"
 source "$ROOT/automation/lib/ui.sh"
 source "$ROOT/automation/lib/dali.sh" # incompatible_add (스택 빌드 비호환 기록)
+source "$ROOT/automation/lib/repo_publish.sh" # repo_publish (학습/상태를 레포에 반영)
 
 RUN_ID="${AGENTHUB_RUN_ID:-local-$(date +%Y%m%d-%H%M%S)-$$}"
 export RUNDIR="$WORKSPACE/runs/$RUN_ID"
@@ -80,6 +81,12 @@ if ! bash "$ROOT/automation/build_stack.sh" "$CORE_ADAPTOR_TAG" "$DALI_UI_TAG"; 
   if grep -q "error:" "$RUNDIR/stack_build.log" 2>/dev/null; then
     incompatible_add "$DALI_UI_TAG" "$CORE_ADAPTOR_TAG" "stack build compile error"
     ui_warn "[stack] $DALI_UI_TAG + $CORE_ADAPTOR_TAG 을 비호환으로 기록 — 새 core/adaptor 태그가 나올 때까지 재시도하지 않는다"
+    # 이 기록은 '사람이 판단할 것'이 아니라 빌드가 증명한 사실이므로 승인 버튼 없이 바로
+    # 레포에 올린다. 여기서 안 올리면 워크스페이스가 사라질 때 학습이 같이 사라져(gitignored)
+    # 다음 설치가 같은 수십 분짜리 빌드를 다시 태운다. allowlist 는 이 파일 하나뿐이다.
+    repo_publish "chore(state): $DALI_UI_TAG + $CORE_ADAPTOR_TAG 을 빌드 비호환으로 기록" \
+      state/incompatible.json \
+      || ui_warn "[stack] 비호환 기록을 리모트에 올리지 못했다 — 로컬에는 남아있다"
     fail upstream-mismatch "업스트림 태그 비호환 — $DALI_UI_TAG 는 $CORE_ADAPTOR_TAG 로 컴파일되지 않는다"
   fi
   fail infra "격리 DALi 스택 빌드 실패 ($CORE_ADAPTOR_TAG + $DALI_UI_TAG)"
@@ -232,4 +239,12 @@ dry-run)
   fail infra "release.json 해석 불가 (status=$REL_STATUS)"
   ;;
 esac
+
+# ── 에이전트 '자기 코드'의 릴리스 대기 알림 ──
+# agent.yaml 의 버전이 아직 태그되지 않았다면 마커를 찍는다. 허브의 후속 작업 버튼
+# (available_when 이 이 마커에 물려 있다)이 뜨고, 사람이 누르면 태그+push+GitHub 릴리스가
+# 사내·사외 양쪽에 나간다. 여기(케이스 분기 뒤)에 두는 이유: `fail` 은 위에서 이미 exit 1 로
+# 빠지므로, 막힌 실행에는 이 제안이 아예 뜨지 않는다 — 승인 요청은 '그 결정이 유일한 잔여
+# 차단 요인' 일 때만 올린다는 원칙(에이전트 하네스 안티패턴 #6).
+bash "$ROOT/automation/release_agent.sh" --check || true
 exit 0

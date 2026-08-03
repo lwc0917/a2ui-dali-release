@@ -37,7 +37,7 @@ _core_adaptor_common_tags() {
   comm -12 <(sort -u <<<"$core") <(sort -u <<<"$adaptor")
 }
 
-# ── 비호환 조합 캐시 ($WORKSPACE/incompatible.json) ────────────────────────────
+# ── 비호환 조합 캐시 (state/incompatible.json — 레포에 영속) ───────────────────
 # 업스트림 세 레포(core/adaptor/ui)의 태그가 항상 정합하지는 않는다. 실측 2026-07-28,
 # dali-ui v2.5.31.10949 는 '어떤 단일 태그로도' 빌드되지 않는다:
 #   · core   는 dali_2.5.32 이상이어야 한다 — DevelActor::SetResizePolicy 가 2.5.32 에서 추가
@@ -48,8 +48,24 @@ _core_adaptor_common_tags() {
 # 나오면 조합이 달라져 자동으로 다시 시도되므로, 업스트림이 정합해지면 스스로 풀린다.
 incompatible_key() { echo "$1+$2"; } # $1=ui_tag $2=core_adaptor_tag
 
+# 캐시 파일 경로. 예전엔 $WORKSPACE/incompatible.json 이었는데 workspace/ 는 gitignored 라
+# 이 머신에만 존재했다 — 워크스페이스를 지우거나 다른 곳에 재설치하면 '이 조합은 빌드가 안
+# 된다'는 학습이 통째로 사라지고, 수십 분짜리 스택 빌드를 다시 태워 같은 결론에 도달한다.
+# 판단이 필요 없는 순수 사실이므로 레포에 두고 실행이 스스로 커밋·push 한다(run.sh).
+: "${INCOMPAT_FILE:=$ROOT/state/incompatible.json}"
+
+# 옛 워크스페이스 캐시가 있으면 한 번만 레포 파일로 옮겨 학습을 잃지 않는다(멱등).
+incompatible_migrate() {
+  [ -f "$INCOMPAT_FILE" ] && return 0
+  [ -f "${WORKSPACE:-}/incompatible.json" ] || return 0
+  mkdir -p "$(dirname "$INCOMPAT_FILE")" || return 0
+  cp "$WORKSPACE/incompatible.json" "$INCOMPAT_FILE" 2>/dev/null \
+    && echo "[incompat] 워크스페이스 캐시를 레포로 이전: $INCOMPAT_FILE" >&2
+}
+
 incompatible_has() { # $1=ui_tag $2=core_adaptor_tag → 0 if cached
-  python3 - "$WORKSPACE/incompatible.json" "$(incompatible_key "$1" "$2")" <<'PY'
+  incompatible_migrate
+  python3 - "$INCOMPAT_FILE" "$(incompatible_key "$1" "$2")" <<'PY'
 import json, sys
 path, key = sys.argv[1], sys.argv[2]
 try:
@@ -62,7 +78,9 @@ PY
 }
 
 incompatible_add() { # $1=ui_tag $2=core_adaptor_tag $3=reason
-  python3 - "$WORKSPACE/incompatible.json" "$(incompatible_key "$1" "$2")" "${3:-}" <<'PY'
+  incompatible_migrate
+  mkdir -p "$(dirname "$INCOMPAT_FILE")"
+  python3 - "$INCOMPAT_FILE" "$(incompatible_key "$1" "$2")" "${3:-}" <<'PY'
 import json, sys
 path, key, reason = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
