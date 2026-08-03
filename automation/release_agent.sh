@@ -81,13 +81,28 @@ trap 'rm -f "$NOTES_FILE"' EXIT
 } >"$NOTES_FILE"
 
 # ── push: 브랜치 + 태그를 사내·사외 양쪽에 ──
+# push 에 성공한 리모트만 릴리스 대상이 된다. 예전엔 무조건 릴리스를 만들었는데, `gh release
+# create` 는 원격에 태그가 없으면 **기본 브랜치 끝에 태그를 새로 만든다** — push 가 실패했는데
+# 릴리스는 생겨서, 릴리스가 가리키는 커밋이 우리가 의도한 커밋이라는 보장이 사라진다
+# (실측 2026-08-03 thorvg v2.4.0: 사외 push 실패 + 사외 릴리스 생성).
 FAILED=""
+PUSHED=""
+remote_has_tag() { # $1=remote — 원격에 같은 태그가 이미 있으면(재실행) 성공으로 본다
+  local ls
+  ls="$(git -C "$ROOT" ls-remote --tags "$1" "refs/tags/$TAG" 2>/dev/null \
+        || git_noproxy -C "$ROOT" ls-remote --tags "$1" "refs/tags/$TAG" 2>/dev/null)"
+  [ -n "$ls" ]
+}
 for remote in ${AGENT_REPO_REMOTES:-origin public}; do
   git -C "$ROOT" remote get-url "$remote" >/dev/null 2>&1 || { ui_info "[release] 리모트 '$remote' 없음 — 건너뜀"; continue; }
   if git_push_resilient "$remote" "$BRANCH" "refs/tags/$TAG"; then
     ui_ok "[release] push: $remote ($BRANCH + $TAG)"
+    PUSHED="$PUSHED $remote"
+  elif remote_has_tag "$remote"; then
+    ui_ok "[release] $remote 에 $TAG 가 이미 있다 — push 생략(멱등)"
+    PUSHED="$PUSHED $remote"
   else
-    ui_err "[release] push 실패: $remote"
+    ui_err "[release] push 실패: $remote — ${GIT_PUSH_ERR##*$'\n'}"
     FAILED="$FAILED push:$remote"
   fi
 done
@@ -117,9 +132,13 @@ gh_release() { # $1=remote
   ui_err "[release] $host 릴리스 실패: $out"
   return 1
 }
-for remote in ${AGENT_REPO_REMOTES:-origin public}; do
-  git -C "$ROOT" remote get-url "$remote" >/dev/null 2>&1 || continue
+for remote in $PUSHED; do
   gh_release "$remote" || FAILED="$FAILED release:$remote"
+done
+for remote in ${AGENT_REPO_REMOTES:-origin public}; do
+  case " $PUSHED " in *" $remote "*) continue ;; esac
+  git -C "$ROOT" remote get-url "$remote" >/dev/null 2>&1 || continue
+  ui_warn "[release] $remote 는 push 가 안 됐으므로 릴리스를 만들지 않는다(커밋이 없는 릴리스 방지)"
 done
 
 if [ -n "$FAILED" ]; then

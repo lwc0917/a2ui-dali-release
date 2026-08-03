@@ -26,9 +26,17 @@ git_noproxy() {
 }
 
 # git_push_resilient <remote> <refspec...> — 프록시로 먼저, 실패하면 프록시 없이 한 번 더.
+# 실패 원문은 절대 삼키지 않는다: 예전엔 `2>/dev/null` 로 버려서, 프록시가 끊은 건지 태그가
+# 이미 있는 건지 권한이 없는 건지 로그만 보고는 알 수 없었다(실측 2026-08-03 — 원인을 찾으려고
+# --no-thin 으로 재현해야 HTTP 403 이 드러났다). 마지막 에러를 GIT_PUSH_ERR 에 남긴다.
+GIT_PUSH_ERR=""
 git_push_resilient() {
-  git -C "$ROOT" push -q "$@" 2>/dev/null && return 0
-  git_noproxy -C "$ROOT" push -q "$@" 2>/dev/null
+  local out
+  out="$(git -C "$ROOT" push "$@" 2>&1)" && return 0
+  GIT_PUSH_ERR="$out"
+  out="$(git_noproxy -C "$ROOT" push "$@" 2>&1)" && return 0
+  GIT_PUSH_ERR="$out"
+  return 1
 }
 
 # repo_publish <commit_msg> <path...>
