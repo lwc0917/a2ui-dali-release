@@ -40,4 +40,5 @@ bash automation/run.sh                      # 실전 (hub 가 이걸 실행)
 - 이미지 리포트는 `$AGENTHUB_RUN_DIR/artifacts/` + `index.json` — hub 의 artifact gallery 확장이 렌더.
 - 사내 프록시는 **큰 push 를 `HTTP 403`/`send-pack: unexpected disconnect` 로 끊는다**(실측 2026-08-03: 1.94MB 6회 실패 → 프록시 없이 1회 성공). 인증 문제로 오진하기 쉽다 — `repo_publish.sh` 의 `git_push_resilient` 가 프록시 우회로 자동 재시도한다.
 - **`git push --atomic origin main vX` 는 태그만 만든다 — Releases 탭은 릴리스 '객체'가 있어야 채워진다.** 실측 2026-08-07: v0.13.0~v0.18.0 태그가 전부 원격에 있는데 GitHub 최신 릴리스는 v0.12.0(6주 전)이었고, 그동안 허브는 매 실행을 초록 "vX 릴리스 완료" 로 보고했다 — 로그로는 절대 안 드러나는 거짓이다. 이제 `release.sh` 가 push 직후 릴리스를 만들고, 실패하면 `[gh-release-missing: vX]` 마커 + 비-0 종료로 허브에 복구 버튼을 띄운다. 릴리스가 없으면 그 실행은 **성공이 아니다**.
+- GitHub 의 **`Latest` 배지는 버전이 아니라 `created_at` 으로 정해진다** — 옛 태그를 소급 릴리스하면 그 옛 버전이 최신 자리를 빼앗는다(실측 2026-08-07: v0.13~v0.17 소급 직후 페이지 최신이 v0.17.0). `gh_ensure_release` 의 6번째 인자로 항상 명시하고, 소급은 원격 최신 태그 하나만 `true` 로.
 - `git remote get-url` 은 `insteadOf` 를 확장한 **전송용** URL 을 준다 — 어느 GitHub 인지(host/slug) 알아내려면 `git config --get remote.<name>.url` 로 raw 값을 읽어야 한다(`gh_remote_url`).

@@ -933,6 +933,25 @@ gr_creates() {
 }
 t "원격에 태그가 있고 릴리스가 없으면 → 생성(노트=CHANGELOG 절 + 전문 링크)" gr_creates
 
+# 'Latest' 배지는 태그 버전이 아니라 created_at 으로 정해진다 — 소급 생성한 옛 릴리스가
+# 최신 자리를 빼앗는 사고를 실제로 냈다(실측 2026-08-07: 소급 후 페이지 최신이 v0.17.0).
+gr_latest_flag() {
+  gr_reset
+  FAKE_GH_HAS_RELEASE=0 gh_ensure_release "$GRREPO" origin v1.2.3 "t" "$TESTWS/notes.md" true \
+    || return 1
+  grep -q -- '--latest' "$FAKE_GH_LOG" && ! grep -q -- '--latest=false' "$FAKE_GH_LOG"
+}
+t "새 릴리스는 latest 로 만든다" gr_latest_flag
+gr_not_latest_flag() {
+  gr_reset
+  FAKE_GH_HAS_RELEASE=0 gh_ensure_release "$GRREPO" origin v1.2.3 "t" "$TESTWS/notes.md" false \
+    || return 1
+  grep -q -- '--latest=false' "$FAKE_GH_LOG"
+}
+t "소급 생성한 옛 릴리스는 latest 를 빼앗지 않는다" gr_not_latest_flag
+t "sync 는 원격 최신 태그만 latest 로 만든다" \
+  grep -q 'NEWEST=' "$ROOT/automation/gh_release_sync.sh"
+
 gr_title() { # 태그 주석 제목을 쓰되 '(automated release)' 꼬리표는 뗀다
   [ "$(gh_release_title "$GRREPO" v1.2.3)" = "a2ui-dali 1.2.3 — dali-ui v9.9.9 rebuild" ]
 }

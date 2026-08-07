@@ -105,16 +105,23 @@ missing | list)
   ;;
 esac
 
+# 'Latest' 배지는 created_at 으로 정해지므로, 소급 생성한 옛 릴리스가 최신 자리를 빼앗는다
+# (실측 2026-08-07). 원격 태그 중 semver 로 가장 높은 것만 latest 로 만들고 나머지는 명시적으로
+# 아니라고 말한다 — 기본값에 맡기면 릴리스 페이지가 다시 엉뚱한 버전을 최신이라고 말한다.
+NEWEST="$(remote_tags | tail -1)"
+
 FAILED=0
 DONE=0
 for tag in "${TAGS[@]}"; do
   ver="${tag#v}"
+  latest=false
+  [ "$tag" = "$NEWEST" ] && latest=true
   notes="$(mktemp)"
   # 절을 못 찾으면(오래된 태그 등) 태그 메시지로 폴백 — 노트 없는 릴리스보다는 낫다.
   gh_changelog_section "$REPO" "$tag" "$ver" >"$notes" 2>/dev/null \
     || git -C "$REPO" tag -l --format='%(contents)' "$tag" >"$notes" 2>/dev/null
   title="$(gh_release_title "$REPO" "$tag" "a2ui-dali")"
-  if gh_ensure_release "$REPO" origin "$tag" "$title" "$notes"; then
+  if gh_ensure_release "$REPO" origin "$tag" "$title" "$notes" "$latest"; then
     case "$GH_RELEASE_STATE" in
     created) ui_ok "[gh-release] 생성: ${GH_RELEASE_URL:-$tag}"; DONE=$((DONE + 1)) ;;
     *) ui_info "[gh-release] $tag 이미 존재 — 유지(멱등)" ;;

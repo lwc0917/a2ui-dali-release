@@ -95,10 +95,19 @@ GH_RELEASE_STATE=""
 GH_RELEASE_ERR=""
 GH_RELEASE_URL=""
 
-# gh_ensure_release <repo_dir> <remote(name|url)> <tag> <title> <notes_file>
+# gh_ensure_release <repo_dir> <remote(name|url)> <tag> <title> <notes_file> [latest:true|false]
+#
+# latest 인자를 반드시 넘겨라. GitHub 의 'Latest' 배지는 태그의 버전이 아니라 **created_at**
+# 으로 정해진다 — 그래서 옛 태그를 나중에 소급 생성하면 그 옛 릴리스가 Latest 를 빼앗는다
+# (실측 2026-08-07: v0.13~v0.17 을 소급 생성하자 릴리스 페이지 최신이 v0.17.0 으로 바뀌었다.
+# 방금 고친 "화면이 거짓말한다" 를 복구 작업이 다시 만들어낸 셈이다).
 gh_ensure_release() {
-  local repo=$1 remote=$2 tag=$3 title=$4 notes=$5
-  local url hs host slug out i notes_full
+  local repo=$1 remote=$2 tag=$3 title=$4 notes=$5 latest=${6:-true}
+  local url hs host slug out i notes_full latest_flag
+  case "$latest" in
+  false) latest_flag="--latest=false" ;;
+  *) latest_flag="--latest" ;;
+  esac
   GH_RELEASE_STATE="failed"
   GH_RELEASE_ERR=""
   GH_RELEASE_URL=""
@@ -138,7 +147,7 @@ gh_ensure_release() {
 
   for i in 1 2 3; do
     out="$(GH_HOST="$host" gh release create "$tag" --repo "$host/$slug" \
-             --title "$title" --notes-file "$notes_full" 2>&1)" && {
+             --title "$title" --notes-file "$notes_full" "$latest_flag" 2>&1)" && {
       GH_RELEASE_STATE="created"
       GH_RELEASE_URL="$out"
       rm -f "$notes_full"
@@ -147,7 +156,7 @@ gh_ensure_release() {
     # 마지막 시도는 프록시 없이 — 사내 프록시가 API 를 끊는 경우가 있다.
     if [ "$i" = "3" ]; then
       out="$(GH_HOST="$host" gh_noproxy release create "$tag" --repo "$host/$slug" \
-               --title "$title" --notes-file "$notes_full" 2>&1)" && {
+               --title "$title" --notes-file "$notes_full" "$latest_flag" 2>&1)" && {
         GH_RELEASE_STATE="created"
         GH_RELEASE_URL="$out"
         rm -f "$notes_full"
