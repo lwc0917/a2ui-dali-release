@@ -11,18 +11,49 @@ source "$ROOT/automation/lib/load_env.sh"
 source "$ROOT/automation/lib/ui.sh"
 source "$ROOT/automation/lib/net.sh"
 source "$ROOT/automation/lib/claude.sh"
+source "$ROOT/automation/lib/gh_release.sh" # 태그 push ≠ 릴리스 — 릴리스 객체까지 만든다
 
 REPO="$SRC/a2ui-dali"
 : "${DALI_UI_TAG:?}" "${CORE_ADAPTOR_TAG:?}" "${RUNDIR:?}"
 REL_JSON="$RUNDIR/release.json"
 
-write_release_json() { # $1=status $2=old $3=new $4=bump $5=note
+write_release_json() { # $1=status $2=old $3=new $4=bump $5=note [$6=gh_release]
   python3 -c '
 import json, sys
 json.dump({"status": sys.argv[2], "old_version": sys.argv[3], "new_version": sys.argv[4],
-           "bump": sys.argv[5], "note": sys.argv[6]}, open(sys.argv[1], "w"),
-          indent=1, ensure_ascii=False)
+           "bump": sys.argv[5], "note": sys.argv[6],
+           "gh_release": sys.argv[7] if len(sys.argv) > 7 else "n/a"},
+          open(sys.argv[1], "w"), indent=1, ensure_ascii=False)
 ' "$REL_JSON" "$@"
+}
+
+# publish_gh_release <ref> <version> — 태그 v$version 에 GitHub 릴리스가 있게 만든다(멱등).
+# 성공/실패 모두 GH_RELEASE_STATE 로 돌아온다. 실패는 조용히 넘기지 않는다: 마커를 찍어
+# 허브가 '제안 준비'(사람이 누르면 복구되는 버튼)로 띄우게 하고, run.sh 가 비-0 으로 끝낸다.
+# 태그만 올라간 릴리스를 초록으로 보고하던 것이 바로 이 에이전트가 6주간 저지른 거짓이다.
+publish_gh_release() {
+  local ref=$1 ver=$2 notes title
+  # 리허설은 바깥 세상을 건드리지 않는다 — 멱등 생략 경로는 DRY_RUN 으로도 도달한다.
+  if [ "${DRY_RUN:-0}" = "1" ]; then
+    GH_RELEASE_STATE="dry-run"
+    ui_info "DRY_RUN — GitHub 릴리스 생성 생략(v$ver)"
+    return 0
+  fi
+  notes="$RUNDIR/release_notes.md"
+  gh_changelog_section "$REPO" "$ref" "$ver" >"$notes" 2>/dev/null \
+    || printf 'a2ui-dali %s — dali-ui %s 기준 자동 릴리스.\n' "$ver" "$DALI_UI_TAG" >"$notes"
+  title="$(gh_release_title "$REPO" "v$ver" "a2ui-dali")"
+  if gh_ensure_release "$REPO" origin "v$ver" "$title" "$notes"; then
+    case "$GH_RELEASE_STATE" in
+    created) ui_ok "GitHub 릴리스 생성: ${GH_RELEASE_URL:-v$ver}" ;;
+    *) ui_info "GitHub 릴리스 v$ver 이미 존재 — 유지(멱등)" ;;
+    esac
+    return 0
+  fi
+  ui_err "GitHub 릴리스 실패(v$ver, $GH_RELEASE_STATE): ${GH_RELEASE_ERR##*$'\n'}"
+  ui_warn "태그는 원격에 있지만 Releases 탭에는 안 보인다 — 사람이 보는 화면에서는 미릴리스다"
+  echo "[gh-release-missing: v$ver]"
+  return 1
 }
 
 ui_step "[release] 릴리스 준비 (dali-ui $DALI_UI_TAG)"
@@ -43,8 +74,16 @@ import re, sys
 m = re.search(r"PROJECT\s*\([^)]*?VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)", sys.stdin.read(), re.S | re.I)
 print(m.group(1) if m else "?")
 ')
-  write_release_json skipped "$OLD" "$OLD" none "origin/main 이 이미 $DALI_UI_TAG 기준 — 릴리스 생략(멱등)"
-  ui_ok "origin/main 이 이미 $DALI_UI_TAG 기준 — 릴리스 생략(멱등)"
+  # 멱등 생략이라도 GitHub 릴리스는 확인한다 — '태그는 있는데 릴리스가 없는' 상태를 고칠
+  # 수 있는 유일한 자동 경로다(ledger 가 이미 done 이라 새 실행은 여기까지도 안 온다).
+  if publish_gh_release origin/main "$OLD"; then
+    write_release_json skipped "$OLD" "$OLD" none \
+      "origin/main 이 이미 $DALI_UI_TAG 기준 — 릴리스 생략(멱등)" "$GH_RELEASE_STATE"
+    ui_ok "origin/main 이 이미 $DALI_UI_TAG 기준 — 릴리스 생략(멱등)"
+    exit 0
+  fi
+  write_release_json skipped "$OLD" "$OLD" none \
+    "origin/main 은 이미 $DALI_UI_TAG 기준이지만 v$OLD 의 GitHub 릴리스가 없다" "$GH_RELEASE_STATE"
   exit 0
 fi
 
@@ -76,7 +115,9 @@ ui_info "버전: $OLD → $NEW ($BUMP, 코드변경=$CODE_CHANGED)"
 # 멱등 가드 2: 릴리스 태그가 이미 원격에 존재
 if [ "$SKIP_IDEMPOTENCY" != "1" ] \
   && [ -n "$(git -C "$REPO" ls-remote --tags origin "refs/tags/v$NEW")" ]; then
-  write_release_json skipped "$OLD" "$NEW" "$BUMP" "v$NEW 태그가 이미 원격에 존재 — 생략(멱등)"
+  publish_gh_release "v$NEW" "$NEW" || true
+  write_release_json skipped "$OLD" "$NEW" "$BUMP" \
+    "v$NEW 태그가 이미 원격에 존재 — 생략(멱등)" "$GH_RELEASE_STATE"
   ui_ok "v$NEW 이미 존재 — 릴리스 생략(멱등)"
   exit 0
 fi
@@ -208,5 +249,11 @@ if ! net_retry git push --atomic origin main "v$NEW"; then
   exit 1
 fi
 
-write_release_json released "$OLD" "$NEW" "$BUMP" "커밋+태그 v$NEW push 완료"
-ui_ok "릴리스 완료: v$NEW"
+# push 는 태그까지만이다 — 여기서 GitHub 릴리스 객체를 만들어야 Releases 탭에 나타난다.
+publish_gh_release HEAD "$NEW" || true
+write_release_json released "$OLD" "$NEW" "$BUMP" \
+  "커밋+태그 v$NEW push 완료 (GitHub 릴리스: $GH_RELEASE_STATE)" "$GH_RELEASE_STATE"
+case "$GH_RELEASE_STATE" in
+created | exists) ui_ok "릴리스 완료: v$NEW" ;;
+*) ui_warn "릴리스 미완: v$NEW — 태그는 push 됐지만 GitHub 릴리스가 없다" ;;
+esac

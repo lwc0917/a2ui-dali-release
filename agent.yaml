@@ -1,7 +1,7 @@
 apiVersion: agenthub/v1
 id: a2ui-dali-release
 name: a2ui-dali Release
-version: 1.2.1
+version: 1.3.0
 description: dali-ui 에 새 릴리스 태그가 생기면 격리 DALi 스택을 재빌드하고, a2ui-dali 렌더러를 빌드(깨지면 Claude 가 코드 적응) 후 갤러리 코퍼스 36종을 이전 릴리스 렌더와 비교. 심각한 시각 훼손이 없으면 github.com/dalihub/a2ui-dali 로 자동 릴리스(버전 범프+태그+push). 결과 리포트(이미지 포함)는 run 페이지에서 확인. 새 태그가 없으면 no-op.
 owner: uifw
 capabilities: [release-check, build, verify, release]
@@ -77,3 +77,17 @@ runner:
         - bash
         - -lc
         - 'set -euo pipefail; exec automation/release_agent.sh --confirmed'
+
+    # 태그는 push 됐는데 GitHub 릴리스 객체 생성만 실패한 run 을 복구한다. 이 상태는 코드가
+    # 이미 공개된 채 Releases 탭에만 안 보이는 것이라 사람이 알아채기 가장 어렵다(실측
+    # 2026-08-07: v0.13.0~v0.18.0 이 6주간 이 상태였고 허브는 계속 "릴리스 완료"였다).
+    # 버튼을 띄우는 조건(마커)과 실행 내용이 같은 스크립트에서 나온다 — 눌렀는데 아무 일도
+    # 안 일어나는 자리를 만들지 않는다.
+    - id: gh-release-sync
+      label: "GitHub 릴리스 복구 (태그는 있는데 릴리스가 없는 버전 생성)"
+      description: "origin/main 이 가리키는 버전의 태그에 GitHub 릴리스를 만듭니다. 노트는 CHANGELOG 의 해당 절에서 뽑고, 이미 릴리스가 있으면 덮어쓰지 않습니다(멱등). 태그가 원격에 없으면 만들지 않고 실패로 끝냅니다 — 엉뚱한 커밋을 가리키는 릴리스를 만드는 것보다 낫습니다."
+      available_when: '\[gh-release-missing'
+      command:
+        - bash
+        - -lc
+        - 'set -euo pipefail; exec automation/gh_release_sync.sh'

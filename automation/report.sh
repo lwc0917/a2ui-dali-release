@@ -29,6 +29,16 @@ fi
 DIAG_FILE="$RUNDIR/diagnosis.txt"
 case "$OUTCOME" in
 success | dry-run | skipped | bootstrap | no-op) : >"$DIAG_FILE" ;;
+# 원인이 이미 확정된 실패는 LLM 진단을 부르지 않는다 — 물어볼 것이 없고, 로그에 없는 추측을
+# 덧붙이면 오히려 사람이 엉뚱한 곳을 본다.
+gh-release-missing)
+  cat >"$DIAG_FILE" <<'DIAG'
+커밋과 태그는 원격(github.com/dalihub/a2ui-dali)에 반영됐지만 GitHub 릴리스 객체 생성이
+실패했습니다. 태그만 있는 버전은 Releases 탭에 나타나지 않아 사용자에게는 미릴리스로 보입니다.
+조치: 이 실행의 후속 작업 버튼(GitHub 릴리스 복구)을 누르면 같은 태그에 릴리스를 만듭니다.
+반복 실패하면 gh CLI 인증(github.com)과 사내 프록시의 API 차단 여부를 확인하세요.
+DIAG
+  ;;
 *)
   PROMPT="a2ui-dali 자동 릴리스 파이프라인이 '$OUTCOME' 단계에서 실패했습니다 (detail: $DETAIL).
 이 디렉토리의 로그 파일들(*.log, compare/compare.json 등)을 Read/Glob 으로 확인하고,

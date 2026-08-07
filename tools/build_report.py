@@ -25,6 +25,10 @@ TITLES = {
     "render":       ("a2ui-dali 자동 릴리스 — 렌더 실패 ⛔", 1),
     "infra":        ("a2ui-dali 자동 릴리스 — 인프라 오류 ⛔", 1),
     "release-push": ("a2ui-dali 자동 릴리스 — push 실패 ⛔", 1),
+    # 태그는 올라갔는데 GitHub 릴리스 객체가 없는 상태. 코드는 이미 공개됐지만 사람이 보는
+    # Releases 탭에는 없으므로 '완료'로 칠하면 안 된다(실측 2026-08-07: v0.13~v0.18 이 이
+    # 상태로 6주간 초록 보고됐다). 사람이 할 일은 허브의 릴리스 복구 버튼 하나뿐이다.
+    "gh-release-missing": ("a2ui-dali 자동 릴리스 — 태그만 반영, GitHub 릴리스 누락 ⛔", 1),
     # 우리 코드 문제가 아니라 업스트림 태그끼리 안 맞는 경우 — 사람이 고칠 게 없고
     # 새 core/adaptor 태그를 기다리면 된다는 걸 제목에서 바로 구분되게 한다.
     "upstream-mismatch": ("a2ui-dali 자동 릴리스 — 업스트림 태그 비호환 ⏸", 1),
@@ -115,6 +119,11 @@ def main():
         tldr = f"최초 baseline 구축 완료 — {args.detail}"
     elif args.outcome == "no-op":
         tldr = "새 dali-ui 릴리스 태그 없음 — 할 일 없음."
+    elif args.outcome == "gh-release-missing":
+        tldr = (f"a2ui-dali **v{release.get('new_version','?')}** 의 커밋·태그는 원격에 올라갔지만 "
+                f"**GitHub 릴리스 객체가 없다** — Releases 탭에는 이 버전이 보이지 않는다. "
+                f"코드 검증은 전부 통과했고 남은 일은 릴리스 생성뿐이다: "
+                f"아래 후속 작업 버튼으로 복구하세요. ({args.detail})")
     elif args.outcome == "gate-damage":
         names = ", ".join(e["name"] for e in damaged) or "?"
         # AI 가 수정한 회귀와 '최종 남은' 손상을 분리한다. 예전엔 수정 전 DAMAGED 였다가 고쳐진

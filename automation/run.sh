@@ -197,6 +197,23 @@ json.dump({"dali_ui": sys.argv[2], "core_adaptor": sys.argv[3], "a2ui_version": 
 
 NEW_VER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("new_version","?"))' \
   "$RUNDIR/release.json" 2>/dev/null || echo "?")
+# 태그 push 와 GitHub 릴리스는 별개다 — 둘 다 돼야 '릴리스됨'이다(created|exists).
+GH_REL=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("gh_release","n/a"))' \
+  "$RUNDIR/release.json" 2>/dev/null || echo "n/a")
+
+# gh_release_gate <version> — 릴리스 객체가 없으면 리포트를 남기고 비-0 으로 끝낸다.
+# 상태(baseline 회전·ledger)를 먼저 정리한 뒤에 부른다: 코드는 이미 원격에 올라갔으므로
+# 다음 실행이 같은 타깃으로 45분 재빌드를 반복할 이유가 없다. release.sh 가 찍은
+# `[gh-release-missing: vX]` 마커가 허브의 복구 버튼(available_when)을 띄운다.
+gh_release_gate() {
+  case "$GH_REL" in
+  created | exists | dry-run) return 0 ;;
+  esac
+  bash "$ROOT/automation/report.sh" gh-release-missing \
+    "v$1 태그는 원격에 있으나 GitHub 릴리스 생성 실패($GH_REL)" || true
+  ui_err "[run] 미완 — v$1 은 태그만 반영됐다. 허브의 릴리스 복구 버튼으로 마무리하세요"
+  exit 1
+}
 
 case "$REL_STATUS" in
 released)
@@ -208,6 +225,7 @@ released)
     rotate_baseline "$NEW_VER" "v$NEW_VER release"
   fi
   bash "$ROOT/automation/release_check.sh" --done "$DALI_UI_TAG"
+  gh_release_gate "$NEW_VER"
   if [ "$AUTO_GOLDEN_UPSTREAM" = "1" ]; then
     REL_NOTE="v$NEW_VER released — 업스트림 렌더링 변화를 사람 승인 없이 자동 골든 승격(${AUTO_UP_NAMES:-?}). 코드 회귀 오분류 대비 감사 필요 — 의심되면 baseline 재부트스트랩."
     bash "$ROOT/automation/report.sh" success "$REL_NOTE"
@@ -227,6 +245,9 @@ skipped)
   else
     rotate_baseline "$NEW_VER" "v$NEW_VER — 멱등 생략 경로(이미 릴리스됨)"
     bash "$ROOT/automation/release_check.sh" --done "$DALI_UI_TAG"
+    # 멱등 생략 경로는 릴리스 누락을 고칠 수 있는 자리이기도 하다 — 못 고쳤으면 그대로 끝내지
+    # 않는다(이 경로가 조용히 초록으로 끝나던 것이 누락을 6주간 감춘 경로 중 하나다).
+    gh_release_gate "$NEW_VER"
     ui_ok "[run] 완료 — 멱등 생략 (이미 릴리스됨)"
   fi
   bash "$ROOT/automation/report.sh" skipped ""

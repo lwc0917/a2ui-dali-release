@@ -841,6 +841,131 @@ run_sh_calls_check_only() {
 t "run.sh 는 --check 만 부른다(에이전트가 스스로 릴리스하지 않는다)" run_sh_calls_check_only
 t "매니페스트 액션이 --confirmed 를 부른다" grep -q 'release_agent.sh --confirmed' "$ROOT/agent.yaml"
 
+ui_step "[selftest] 18) GitHub 릴리스 (태그 push ≠ 릴리스)"
+# 실측 2026-08-07: v0.13.0~v0.18.0 은 태그가 원격에 다 있는데 Releases 최신은 v0.12.0 이었고,
+# 허브는 매번 초록 "릴리스 완료" 를 보고했다. 로그만 봐서는 알 수 없는 거짓이라 계약으로 못박는다.
+source "$ROOT/automation/lib/gh_release.sh"
+export GH_RELEASE_RETRY_SLEEP=0
+
+GRBIN="$TESTWS/bin"
+mkdir -p "$GRBIN"
+cat >"$GRBIN/gh" <<'FAKEGH'
+#!/bin/bash
+# gh 대역: 호출을 기록하고, 릴리스 존재/생성 성공 여부를 env 로 조종한다.
+printf '%s\n' "$*" >>"$FAKE_GH_LOG"
+if [ "${1:-}" = "release" ] && [ "${2:-}" = "view" ]; then
+  [ "${FAKE_GH_HAS_RELEASE:-0}" = "1" ] && exit 0
+  exit 1
+fi
+if [ "${1:-}" = "release" ] && [ "${2:-}" = "create" ]; then
+  [ "${FAKE_GH_CREATE_FAIL:-0}" = "1" ] && { echo "HTTP 403 (fake)"; exit 1; }
+  while [ $# -gt 0 ]; do
+    [ "$1" = "--notes-file" ] && cat "$2" >>"$FAKE_GH_NOTES"
+    shift
+  done
+  echo "https://github.com/fake/repo/releases/tag/fake"
+  exit 0
+fi
+exit 0
+FAKEGH
+chmod +x "$GRBIN/gh"
+export PATH="$GRBIN:$PATH"
+export FAKE_GH_LOG="$TESTWS/gh.log" FAKE_GH_NOTES="$TESTWS/gh.notes"
+
+# 제품 레포 대역: CHANGELOG + 태그 + 진짜 원격(bare) — ls-remote 가 오프라인으로 동작한다.
+GRREPO="$TESTWS/prod"
+mkdir -p "$GRREPO"
+git init -q "$GRREPO"
+git -C "$GRREPO" config user.email t@t
+git -C "$GRREPO" config user.name t
+cat >"$GRREPO/CHANGELOG.md" <<'CL'
+# Changelog
+
+## [1.2.3] — 2026-08-07
+
+### Changed
+
+- 절 안의 내용만 뽑혀야 한다.
+
+## [1.2.2] — 2026-08-01
+
+- 아랫 절은 섞이면 안 된다.
+CL
+git -C "$GRREPO" add -A && git -C "$GRREPO" commit -q -m init
+git -C "$GRREPO" tag -a v1.2.3 -m "a2ui-dali 1.2.3 — dali-ui v9.9.9 rebuild (automated release)"
+git init -q --bare "$TESTWS/prod-remote.git"
+# 리모트 URL 은 진짜 GitHub 처럼 두고(host/slug 파싱 대상), 전송만 로컬 bare 로 돌린다
+# (insteadOf). 로컬 경로를 URL 로 쓰면 파싱이 실패해 정작 검증하려는 분기까지 못 간다.
+git -C "$GRREPO" remote add origin https://github.com/fake/repo.git
+git -C "$GRREPO" config "url.$TESTWS/prod-remote.git.insteadOf" https://github.com/fake/repo.git
+
+gr_reset() { : >"$FAKE_GH_LOG"; : >"$FAKE_GH_NOTES"; }
+
+# t 는 `bash -c` 를 새 프로세스로 띄우므로 source 한 lib 함수가 안 보인다 → 셸 함수로 감싼다.
+gr_section() {
+  local s
+  s="$(gh_changelog_section "$GRREPO" HEAD 1.2.3)" || return 1
+  grep -q '절 안의 내용만' <<<"$s" && ! grep -q '아랫 절' <<<"$s"
+}
+t "CHANGELOG 절 추출: 그 버전만 (아랫 절 침범 없음)" gr_section
+
+# 안전장치 1 (thorvg v2.4.0 실측): 원격에 태그가 없으면 릴리스를 만들면 안 된다.
+# gh release create 가 기본 브랜치 끝에 태그를 새로 만들어, 릴리스가 엉뚱한 커밋을 가리킨다.
+gr_no_tag() {
+  gr_reset
+  FAKE_GH_HAS_RELEASE=0 gh_ensure_release "$GRREPO" origin v1.2.3 "t" /dev/null
+  local rc=$?
+  [ "$rc" = 1 ] && [ "$GH_RELEASE_STATE" = "no-tag" ] && ! grep -q 'release create' "$FAKE_GH_LOG"
+}
+t "원격에 태그가 없으면 릴리스를 만들지 않는다 (no-tag, create 미호출)" gr_no_tag
+
+git -C "$GRREPO" push -q origin HEAD:refs/heads/main v1.2.3
+
+gr_creates() {
+  gr_reset
+  gh_changelog_section "$GRREPO" HEAD 1.2.3 >"$TESTWS/notes.md"
+  FAKE_GH_HAS_RELEASE=0 gh_ensure_release "$GRREPO" origin v1.2.3 \
+    "$(gh_release_title "$GRREPO" v1.2.3)" "$TESTWS/notes.md" || return 1
+  [ "$GH_RELEASE_STATE" = "created" ] || return 1
+  grep -q 'release create v1.2.3' "$FAKE_GH_LOG" || return 1
+  # 노트에 CHANGELOG 절과 전문 링크가 함께 들어간다(기존 수동 릴리스의 관례).
+  grep -q '절 안의 내용만' "$FAKE_GH_NOTES" && grep -q 'Full changelog' "$FAKE_GH_NOTES"
+}
+t "원격에 태그가 있고 릴리스가 없으면 → 생성(노트=CHANGELOG 절 + 전문 링크)" gr_creates
+
+gr_title() { # 태그 주석 제목을 쓰되 '(automated release)' 꼬리표는 뗀다
+  [ "$(gh_release_title "$GRREPO" v1.2.3)" = "a2ui-dali 1.2.3 — dali-ui v9.9.9 rebuild" ]
+}
+t "릴리스 제목 = 태그 주석 제목" gr_title
+
+gr_idempotent() {
+  gr_reset
+  FAKE_GH_HAS_RELEASE=1 gh_ensure_release "$GRREPO" origin v1.2.3 "t" "$TESTWS/notes.md" || return 1
+  [ "$GH_RELEASE_STATE" = "exists" ] && ! grep -q 'release create' "$FAKE_GH_LOG"
+}
+t "이미 릴리스가 있으면 노트를 덮어쓰지 않는다 (멱등, create 미호출)" gr_idempotent
+
+gr_fail_closed() {
+  gr_reset
+  FAKE_GH_HAS_RELEASE=0 FAKE_GH_CREATE_FAIL=1 \
+    gh_ensure_release "$GRREPO" origin v1.2.3 "t" "$TESTWS/notes.md"
+  local rc=$?
+  [ "$rc" = 1 ] && [ "$GH_RELEASE_STATE" = "failed" ]
+}
+t "생성이 계속 실패하면 failed 로 보고한다 (조용한 성공 없음)" gr_fail_closed
+
+# 계약: 파이프라인이 실제로 이 경로를 지나가야 의미가 있다.
+t "release.sh 는 push 후 릴리스를 만든다" \
+  grep -q 'publish_gh_release HEAD' "$ROOT/automation/release.sh"
+t "release.sh 는 DRY_RUN 에서 릴리스를 만들지 않는다" bash -c "
+  grep -A4 'publish_gh_release() {' '$ROOT/automation/release.sh' | grep -q 'DRY_RUN'"
+t "release.sh 는 실패 시 복구 마커를 찍는다" \
+  grep -q 'gh-release-missing: v' "$ROOT/automation/release.sh"
+t "run.sh 는 릴리스가 없으면 비-0 으로 끝낸다" bash -c "
+  grep -q 'gh_release_gate' '$ROOT/automation/run.sh'"
+t "마커에 물린 복구 액션이 매니페스트에 있다" bash -c "
+  grep -q 'gh-release-missing' '$ROOT/agent.yaml' && grep -q 'gh_release_sync.sh' '$ROOT/agent.yaml'"
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   ui_ok "[selftest] 전 항목 통과"
