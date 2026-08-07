@@ -816,30 +816,66 @@ t "비호환 캐시: 옛 워크스페이스 캐시를 이전한다" bash -c "
     bash -c 'source \"$ROOT/automation/lib/dali.sh\"; incompatible_has old pair' )
   grep -q 'old+pair' '$TESTWS/state2/incompatible.json'"
 
-ui_step "[selftest] 17) 에이전트 자기 릴리스 — 마커는 '릴리스할 것이 있고 트리가 깨끗할 때만'"
+ui_step "[selftest] 17) 에이전트 자기 릴리스 — 사내 전용 · 승인 없이 자동 (정책 2026-08-07)"
+# 에이전트 코드는 사내에서만 쓴다. 사외(public) 리모트가 설정돼 있어도 절대 push 하지 않는다 —
+# 이 계약이 깨지면 사내 전용 코드가 조용히 공개된다(되돌릴 수 없는 종류의 사고).
 RA="$TESTWS/ra"; mkdir -p "$RA/automation/lib"
 cp "$ROOT/automation/release_agent.sh" "$RA/automation/"
 cp "$ROOT/automation/lib/ui.sh" "$ROOT/automation/lib/load_env.sh" "$ROOT/automation/lib/repo_publish.sh" "$RA/automation/lib/"
 printf 'apiVersion: agenthub/v1\nid: x\nname: x\nversion: 9.9.9\n' > "$RA/agent.yaml"
 git init -q "$RA" && git -C "$RA" config user.email t@t && git -C "$RA" config user.name t
 git -C "$RA" add -A && git -C "$RA" commit -q -m init
-t "릴리스 마커: 미태그 + 깨끗한 트리 → 제안" bash -c "
-  WORKSPACE='$TESTWS/rws' bash '$RA/automation/release_agent.sh' --check 2>/dev/null | grep -q '\\[agent-release-ready: v9.9.9\\]'"
-t "릴리스 마커: 워킹트리가 더러우면 제안하지 않는다" bash -c "
-  echo dirt > '$RA/dirt.txt'
-  ! WORKSPACE='$TESTWS/rws' bash '$RA/automation/release_agent.sh' --check 2>/dev/null | grep -q 'agent-release-ready'"
-t "릴리스 마커: 이미 태그된 버전이면 제안하지 않는다" bash -c "
-  rm -f '$RA/dirt.txt'; git -C '$RA' tag -a v9.9.9 -m v9.9.9
-  ! WORKSPACE='$TESTWS/rws' bash '$RA/automation/release_agent.sh' --check 2>/dev/null | grep -q 'agent-release-ready'"
-t "릴리스 실행: 더러운 트리에서는 fail-closed(비-0)" bash -c "
-  echo dirt > '$RA/dirt.txt'
-  ! WORKSPACE='$TESTWS/rws' bash '$RA/automation/release_agent.sh' --confirmed >/dev/null 2>&1"
-run_sh_calls_check_only() {
-  grep -qE 'release_agent\.sh"? --check' "$ROOT/automation/run.sh" \
-    && ! grep -qE 'release_agent\.sh"? --confirmed' "$ROOT/automation/run.sh"
+# 사내(origin) · 사외(public) 두 리모트를 실제 bare 레포로 붙인다 — '어디에 갔는지' 를 눈으로 본다.
+git init -q --bare "$TESTWS/ra-origin.git"
+git init -q --bare "$TESTWS/ra-public.git"
+git -C "$RA" remote add origin "$TESTWS/ra-origin.git"
+git -C "$RA" remote add public "$TESTWS/ra-public.git"
+ra_run() { WORKSPACE="$TESTWS/rws" bash "$RA/automation/release_agent.sh" "$@" >/dev/null 2>&1; }
+ra_tag_on() { [ -n "$(git -C "$TESTWS/$1.git" tag -l v9.9.9 2>/dev/null)" ]; }
+
+ra_auto_tags_internal() { ra_run --auto; ra_tag_on ra-origin; }
+t "자동: 미태그 + 깨끗한 트리 → 사내에 태그 push (승인 없음)" ra_auto_tags_internal
+ra_never_public() { ! ra_tag_on ra-public; }
+t "자동: 사외 리모트가 있어도 절대 push 하지 않는다" ra_never_public
+ra_idempotent() { # 이미 태그된 버전이면 아무것도 하지 않는다
+  ra_run --auto
+  [ "$(git -C "$RA" tag -l v9.9.9 | wc -l)" = 1 ]
 }
-t "run.sh 는 --check 만 부른다(에이전트가 스스로 릴리스하지 않는다)" run_sh_calls_check_only
-t "매니페스트 액션이 --confirmed 를 부른다" grep -q 'release_agent.sh --confirmed' "$ROOT/agent.yaml"
+t "자동: 이미 태그된 버전이면 재실행해도 그대로(멱등)" ra_idempotent
+ra_dirty_skips() {
+  git -C "$RA" tag -d v9.9.9 >/dev/null 2>&1
+  git -C "$TESTWS/ra-origin.git" tag -d v9.9.9 >/dev/null 2>&1
+  echo dirt >"$RA/dirt.txt"
+  ra_run --auto
+  ! ra_tag_on ra-origin && [ -z "$(git -C "$RA" tag -l v9.9.9)" ]
+}
+t "자동: 워킹트리가 더러우면 태그하지 않는다(무엇이 릴리스됐는지 갈리지 않게)" ra_dirty_skips
+ra_push_fail_rolls_back() { # push 가 실패하면 로컬 태그를 되돌려 다음 실행이 재시도한다
+  rm -f "$RA/dirt.txt"
+  git -C "$RA" remote set-url origin "$TESTWS/nonexistent.git"
+  ra_run --auto
+  local rc=$?
+  git -C "$RA" remote set-url origin "$TESTWS/ra-origin.git"
+  [ "$rc" = 0 ] && [ -z "$(git -C "$RA" tag -l v9.9.9)" ] # run 은 안 죽이고, 태그는 남기지 않는다
+}
+t "자동: push 실패 → 태그 되돌림 + 실행은 죽이지 않음(다음 실행 재시도)" ra_push_fail_rolls_back
+ra_check_no_side_effect() {
+  ra_run --check
+  [ -z "$(git -C "$RA" tag -l v9.9.9)" ]
+}
+t "--check 는 부작용이 없다" ra_check_no_side_effect
+t "run.sh 가 --auto 를 부른다(승인 대기 없이 스스로 남긴다)" \
+  grep -qE 'release_agent\.sh"? --auto' "$ROOT/automation/run.sh"
+no_release_button() { # 승인 버튼은 없어야 한다 — 사외 공개가 없으니 승인할 결정도 없다
+  ! grep -q 'agent-release-ready' "$ROOT/agent.yaml" \
+    && ! grep -q 'release_agent.sh --confirmed' "$ROOT/agent.yaml"
+}
+t "매니페스트에 릴리스 승인 버튼이 없다" no_release_button
+internal_only_defaults() { # 사내 전용 기본값이 코드에 박혀 있다
+  ! grep -q 'AGENT_REPO_REMOTES:-origin public' "$ROOT/automation/lib/repo_publish.sh" \
+    && ! grep -q 'GOLDEN_REMOTES:-origin public' "$ROOT/automation/golden_publish.sh"
+}
+t "기본 리모트 목록이 사내(origin) 뿐이다" internal_only_defaults
 
 ui_step "[selftest] 18) GitHub 릴리스 (태그 push ≠ 릴리스)"
 # 실측 2026-08-07: v0.13.0~v0.18.0 은 태그가 원격에 다 있는데 Releases 최신은 v0.12.0 이었고,

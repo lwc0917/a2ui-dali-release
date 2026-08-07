@@ -73,7 +73,9 @@ repo_push_current_branch() {
     || { ui_warn "[publish] detached HEAD — push 생략(커밋은 로컬에 있다)"; return 1; }
   fallback="${REPO_PUBLISH_FALLBACK:-agent-state/update}"
   ok=""; bad=""
-  for remote in ${AGENT_REPO_REMOTES:-origin public}; do
+  # 사내 전용(정책 2026-08-07: 에이전트 레포는 사외에 올리지 않는다). 예전 기본값은
+  # "origin public" 이었다 — 제품 발행 경로는 이 변수와 무관하므로 영향받지 않는다.
+  for remote in ${AGENT_REPO_REMOTES:-origin}; do
     git -C "$ROOT" remote get-url "$remote" >/dev/null 2>&1 \
       || { ui_info "[publish] 리모트 '$remote' 없음 — 건너뜀"; continue; }
     if ! git -C "$ROOT" fetch -q "$remote" "$branch" 2>/dev/null \

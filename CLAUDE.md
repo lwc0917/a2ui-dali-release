@@ -42,3 +42,10 @@ bash automation/run.sh                      # 실전 (hub 가 이걸 실행)
 - **`git push --atomic origin main vX` 는 태그만 만든다 — Releases 탭은 릴리스 '객체'가 있어야 채워진다.** 실측 2026-08-07: v0.13.0~v0.18.0 태그가 전부 원격에 있는데 GitHub 최신 릴리스는 v0.12.0(6주 전)이었고, 그동안 허브는 매 실행을 초록 "vX 릴리스 완료" 로 보고했다 — 로그로는 절대 안 드러나는 거짓이다. 이제 `release.sh` 가 push 직후 릴리스를 만들고, 실패하면 `[gh-release-missing: vX]` 마커 + 비-0 종료로 허브에 복구 버튼을 띄운다. 릴리스가 없으면 그 실행은 **성공이 아니다**.
 - GitHub 의 **`Latest` 배지는 버전이 아니라 `created_at` 으로 정해진다** — 옛 태그를 소급 릴리스하면 그 옛 버전이 최신 자리를 빼앗는다(실측 2026-08-07: v0.13~v0.17 소급 직후 페이지 최신이 v0.17.0). `gh_ensure_release` 의 6번째 인자로 항상 명시하고, 소급은 원격 최신 태그 하나만 `true` 로.
 - `git remote get-url` 은 `insteadOf` 를 확장한 **전송용** URL 을 준다 — 어느 GitHub 인지(host/slug) 알아내려면 `git config --get remote.<name>.url` 로 raw 값을 읽어야 한다(`gh_remote_url`).
+
+## 사내 전용 정책 (2026-08-07)
+- **이 에이전트 레포의 코드는 사내에서만 쓴다.** `origin`(사내)에만 push 하고 사외(`public`)로는 push·릴리스하지 않는다. 클론에 `public` 리모트가 남아 있어도 쓰지 않는다.
+- 단, **제품 발행 경로는 그대로 사외로 나간다**(아래 줄) — 레포 코드와 제품을 헷갈리지 말 것.
+- 기본값 `AGENT_REPO_REMOTES=origin` 이 코드에 박혀 있고 selftest 가 "사외 리모트가 있어도 push 하지 않는다" 를 실제 bare 레포로 검증한다.
+- **에이전트 코드 릴리스에 승인 버튼이 없다.** `run.sh` 가 끝에서 `release_agent.sh --auto` 로 사내 태그+릴리스를 직접 남긴다(미태그 + 깨끗한 트리일 때만, 멱등). 실패해도 run 을 죽이지 않고 다음 실행이 재시도한다.
+- 제품 발행(사외 유지): `github.com/dalihub/a2ui-dali` 커밋·태그·**GitHub 릴리스**.

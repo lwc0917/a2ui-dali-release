@@ -267,5 +267,5 @@ esac
 # 사내·사외 양쪽에 나간다. 여기(케이스 분기 뒤)에 두는 이유: `fail` 은 위에서 이미 exit 1 로
 # 빠지므로, 막힌 실행에는 이 제안이 아예 뜨지 않는다 — 승인 요청은 '그 결정이 유일한 잔여
 # 차단 요인' 일 때만 올린다는 원칙(에이전트 하네스 안티패턴 #6).
-bash "$ROOT/automation/release_agent.sh" --check || true
+bash "$ROOT/automation/release_agent.sh" --auto || true
 exit 0

@@ -45,7 +45,7 @@ fi
 #    ahead/behind 가드·프록시 우회 폴백을 한 곳에서 담당한다. 예전엔 이 블록이 여기에
 #    통째로 복붙돼 있었고, 그래서 프록시 우회 같은 개선이 이 스크립트에만 적용됐다. ──
 REPO_PUBLISH_FALLBACK="a2ui-golden/update" \
-AGENT_REPO_REMOTES="${GOLDEN_REMOTES:-origin public}" \
+AGENT_REPO_REMOTES="${GOLDEN_REMOTES:-origin}" \
   repo_publish "golden: ${DALI_UI_TAG:-?} 기준으로 갱신 ($REASON)" golden
 rc=$?
 [ "$rc" = "0" ] || ui_warn "[golden] 일부 리모트에 반영하지 못했다 — 커밋은 로컬에 있다"
